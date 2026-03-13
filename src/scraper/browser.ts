@@ -5,7 +5,8 @@ import { logger } from '../utils/logger.js'
 import { confirm } from '@inquirer/prompts'
 
 export class BrowserManager {
-  private browser: Browser | null = null
+  public browser: Browser | null = null
+
   private context: BrowserContext | null = null
   private page: Page | null = null
 

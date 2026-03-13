@@ -1,23 +1,23 @@
 import chalk from 'chalk'
 
 export const logger = {
-  info(message: string): void {
-    console.log(chalk.blue('ℹ'), message)
+  info(...args: unknown[]): void {
+    console.log(chalk.blue('ℹ'), ...args)
   },
 
-  success(message: string): void {
-    console.log(chalk.green('✓'), message)
+  success(...args: unknown[]): void {
+    console.log(chalk.green('✓'), ...args)
   },
 
-  warn(message: string): void {
-    console.log(chalk.yellow('⚠'), message)
+  warn(...args: unknown[]): void {
+    console.log(chalk.yellow('⚠'), ...args)
   },
 
-  error(message: string): void {
-    console.error(chalk.red('✗'), message)
+  error(...args: unknown[]): void {
+    console.error(chalk.red('✗'), ...args)
   },
 
-  debug(message: string): void {
-    console.log(chalk.gray('›'), message)
+  debug(...args: unknown[]): void {
+    console.log(chalk.gray('›'), ...args)
   },
 }

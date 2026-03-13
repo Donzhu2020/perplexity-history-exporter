@@ -11,13 +11,19 @@ export class CommandHandler {
   private checkpointManager: CheckpointManager
   private searchOrchestrator: SearchOrchestrator
 
+  private browserUninitializedError = new Error('Browser wasn\'t initialized.')
+
   constructor() {
     this.checkpointManager = new CheckpointManager()
     this.searchOrchestrator = new SearchOrchestrator()
   }
 
   async handleStartLibrary(): Promise<void> {
-    await this.runScraperLibrary()
+    try {
+      await this.runScraperLibrary()
+    } catch (error) {
+      logger.error('Scraper failed:', error instanceof Error ? error : String(error))
+    }
   }
 
   async handleStartWizard(): Promise<void> {
@@ -71,7 +77,9 @@ export class CommandHandler {
 
       logger.info(`\n=== Phase 2: Parallel Extraction (${pending.length} pending) ===\n`)
 
-      const browser = (browserManager as any).browser
+      const browser = browserManager.browser
+      if (!browser) throw this.browserUninitializedError
+
       const workerPool = new WorkerPool(this.checkpointManager)
       await workerPool.initialize(browser)
 
