@@ -5,3 +5,4 @@ dist/
 exports/
 *.log
 .aider*
+*.old
