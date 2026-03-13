@@ -8,16 +8,44 @@ import { showHelp } from './help.js'
 import { LibraryDiscovery } from '../scraper/library-discovery.js'
 
 export class CommandHandler {
+  // ========== Custom Error Classes ==========
+  static readonly ScraperError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'ScraperError'
+    }
+  }
+
+  static readonly SearchError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'SearchError'
+    }
+  }
+
+  static readonly VectorizeError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'VectorizeError'
+    }
+  }
+
+  static readonly ValidationError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'ValidationError'
+    }
+  }
+
   private checkpointManager: CheckpointManager
   private searchOrchestrator: SearchOrchestrator
-
-  private browserUninitializedError = new Error('Browser wasn\'t initialized.')
 
   constructor() {
     this.checkpointManager = new CheckpointManager()
     this.searchOrchestrator = new SearchOrchestrator()
   }
 
+  // ========== Public Command Handlers ==========
   async handleStartLibrary(): Promise<void> {
     try {
       await this.runScraperLibrary()
@@ -30,91 +58,15 @@ export class CommandHandler {
     const progress = this.checkpointManager.getProgress()
 
     if (progress.total > 0) {
-      console.log()
-      const resumeChoice = await select({
-        message: `Found checkpoint (${progress.processed}/${progress.total} processed). What do you want to do?`,
-        choices: [
-          { name: 'Resume from checkpoint', value: 'resume' },
-          { name: 'Restart from scratch', value: 'restart' },
-          { name: 'Cancel', value: 'cancel' },
-        ],
-      })
-
-      if (resumeChoice === 'cancel') {
-        logger.info('Start cancelled.')
-        return
-      }
-
-      if (resumeChoice === 'restart') {
-        this.checkpointManager.reset()
-      }
+      await this.handleCheckpointPrompt()
     }
 
     await this.runScraperLibrary()
   }
 
-  private async runScraperLibrary(): Promise<void> {
-    const browserManager = new BrowserManager()
-
-    try {
-      const page = await browserManager.launch()
-
-      if (!this.checkpointManager.isDiscoveryComplete()) {
-        logger.info('\n=== Phase 1: Library Discovery ===\n')
-
-        const libraryDiscovery = new LibraryDiscovery()
-        const conversations = await libraryDiscovery.discoverFromLibrary(page)
-
-        this.checkpointManager.setDiscoveredConversations(conversations)
-      }
-
-      const pending = this.checkpointManager.getPendingConversations()
-
-      if (pending.length === 0) {
-        logger.success('All conversations already processed!')
-        return
-      }
-
-      logger.info(`\n=== Phase 2: Parallel Extraction (${pending.length} pending) ===\n`)
-
-      const browser = browserManager.browser
-      if (!browser) throw this.browserUninitializedError
-
-      const workerPool = new WorkerPool(this.checkpointManager)
-      await workerPool.initialize(browser)
-
-      await workerPool.processConversations(pending)
-
-      this.checkpointManager.finalSave()
-      await workerPool.close()
-
-      logger.success('\n✨ Export complete!')
-    } catch (error) {
-      logger.error('Scraping failed:')
-      if (error instanceof Error) {
-        logger.error(error.message)
-      }
-    } finally {
-      await browserManager.close()
-    }
-  }
-
   async handleSearchWizard(): Promise<void> {
-    const query = await input({
-      message: 'Search query:',
-      validate: (value) => (value.trim().length === 0 ? 'Please enter a query.' : true),
-    })
-
-    const mode = await select({
-      message: 'Search mode:',
-      choices: [
-        { name: 'Auto (semantic for long queries, exact for short)', value: 'auto' },
-        { name: 'Semantic (Ollama + Vectra)', value: 'vector' },
-        { name: 'Exact text (ripgrep)', value: 'rg' },
-      ],
-      default: 'auto',
-    })
-
+    const query = await this.promptSearchQuery()
+    const mode = await this.promptSearchMode()
     const rgOptions = {
       pattern: query,
       caseSensitive: false,
@@ -152,26 +104,8 @@ export class CommandHandler {
     try {
       await this.searchOrchestrator.validateVectorSearch()
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      logger.error(message)
-
-      const retry = await confirm({
-        message:
-          'Ollama validation failed. Start Ollama (with the embedding model) and retry vectorization?',
-        default: false,
-      })
-
-      if (!retry) {
-        return
-      }
-
-      try {
-        await this.searchOrchestrator.validateVectorSearch()
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        logger.error(msg)
-        return
-      }
+      await this.handleValidationRetry(error)
+      return
     }
 
     await this.searchOrchestrator.vectorizeNow()
@@ -181,7 +115,127 @@ export class CommandHandler {
     showHelp()
   }
 
-  private async validateVectorIfNeeded(mode: 'auto' | 'vector' | 'rg'): Promise<void> {
+  // ========== Private Helpers ==========
+
+  /**
+   * Run the full library scraping process.
+   * @throws {CommandHandler.ScraperError} on fatal errors.
+   */
+  private async runScraperLibrary(): Promise<void> {
+    const browserManager = new BrowserManager()
+
+    try {
+      const page = await browserManager.launch()
+
+      if (!this.checkpointManager.isDiscoveryComplete()) {
+        await this.runDiscoveryPhase(page)
+      }
+
+      const pending = this.checkpointManager.getPendingConversations()
+
+      if (pending.length === 0) {
+        logger.success('All conversations already processed!')
+        return
+      }
+
+      await this.runExtractionPhase(browserManager, pending)
+
+      logger.success('\n✨ Export complete!')
+    } catch (error) {
+      throw new CommandHandler.ScraperError(
+        `Scraping failed: ${error instanceof Error ? error.message : String(error)}`
+      )
+    } finally {
+      await browserManager.close()
+    }
+  }
+
+  /**
+   * Phase 1: Discover all conversations via library API.
+   */
+  private async runDiscoveryPhase(page: any): Promise<void> {
+    logger.info('\n=== Phase 1: Library Discovery ===\n')
+    const libraryDiscovery = new LibraryDiscovery()
+    const conversations = await libraryDiscovery.discoverFromLibrary(page)
+    this.checkpointManager.setDiscoveredConversations(conversations)
+  }
+
+  /**
+   * Phase 2: Extract conversations using worker pool.
+   */
+  private async runExtractionPhase(browserManager: BrowserManager, pending: any[]): Promise<void> {
+    logger.info(`\n=== Phase 2: Parallel Extraction (${pending.length} pending) ===\n`)
+
+    const browser = browserManager.browser
+    if (!browser) {
+      throw new CommandHandler.ScraperError('Browser was not initialized')
+    }
+
+    const workerPool = new WorkerPool(this.checkpointManager)
+    await workerPool.initialize(browser)
+
+    try {
+      await workerPool.processConversations(pending)
+      this.checkpointManager.finalSave()
+    } finally {
+      await workerPool.close()
+    }
+  }
+
+  /**
+   * Prompt user about resuming/restarting when a checkpoint exists.
+   */
+  private async handleCheckpointPrompt(): Promise<void> {
+    const progress = this.checkpointManager.getProgress()
+    console.log()
+    const resumeChoice = await select({
+      message: `Found checkpoint (${progress.processed}/${progress.total} processed). What do you want to do?`,
+      choices: [
+        { name: 'Resume from checkpoint', value: 'resume' },
+        { name: 'Restart from scratch', value: 'restart' },
+        { name: 'Cancel', value: 'cancel' },
+      ],
+    })
+
+    if (resumeChoice === 'cancel') {
+      logger.info('Start cancelled.')
+      process.exit(0) // or throw a custom cancel error? We'll exit cleanly.
+    }
+
+    if (resumeChoice === 'restart') {
+      this.checkpointManager.reset()
+    }
+  }
+
+  /**
+   * Prompt for search query.
+   */
+  private async promptSearchQuery(): Promise<string> {
+    return input({
+      message: 'Search query:',
+      validate: (value) => (value.trim().length === 0 ? 'Please enter a query.' : true),
+    })
+  }
+
+  /**
+   * Prompt for search mode.
+   */
+  private async promptSearchMode(): Promise<string> {
+    return select({
+      message: 'Search mode:',
+      choices: [
+        { name: 'Auto (semantic for long queries, exact for short)', value: 'auto' },
+        { name: 'Semantic (Ollama + Vectra)', value: 'vector' },
+        { name: 'Exact text (ripgrep)', value: 'rg' },
+      ],
+      default: 'auto',
+    })
+  }
+
+  /**
+   * Validate vector search availability if mode requires it.
+   */
+  private async validateVectorIfNeeded(mode: string): Promise<void> {
     if (mode === 'rg') return
 
     try {
@@ -190,7 +244,36 @@ export class CommandHandler {
       const message = error instanceof Error ? error.message : String(error)
       logger.error(message)
       logger.info('Start Ollama with the embedding model, then run "vectorize".')
-      throw error
+      throw new CommandHandler.ValidationError(message)
     }
+  }
+
+  /**
+   * Handle validation failure during vectorize wizard.
+   */
+  private async handleValidationRetry(error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(message)
+
+    const retry = await confirm({
+      message:
+        'Ollama validation failed. Start Ollama (with the embedding model) and retry vectorization?',
+      default: false,
+    })
+
+    if (!retry) {
+      return
+    }
+
+    try {
+      await this.searchOrchestrator.validateVectorSearch()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logger.error(msg)
+      return
+    }
+
+    // If validation passed, continue to vectorization
+    await this.searchOrchestrator.vectorizeNow()
   }
 }

@@ -7,6 +7,21 @@ import chalk from 'chalk'
 export type SearchMode = 'rg' | 'vector' | 'auto'
 
 export class SearchOrchestrator {
+  // ========== Custom Error Classes ==========
+  static readonly SearchOrchestratorError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'SearchOrchestratorError'
+    }
+  }
+
+  static readonly ValidationError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'SearchOrchestratorValidationError'
+    }
+  }
+
   private rgSearch: RgSearch
   private vectorStore: VectorStore
 
@@ -17,7 +32,9 @@ export class SearchOrchestrator {
 
   async validateVectorSearch(): Promise<void> {
     if (!config.enableVectorSearch) {
-      throw new Error('Vector search is disabled (ENABLE_VECTOR_SEARCH=false).')
+      throw new SearchOrchestrator.ValidationError(
+        'Vector search is disabled (ENABLE_VECTOR_SEARCH=false).'
+      )
     }
     await this.vectorStore.validate()
   }
@@ -27,16 +44,27 @@ export class SearchOrchestrator {
   }
 
   async search(query: string, mode: SearchMode, rgOptions: RgSearchOptions): Promise<void> {
-    if (mode === 'rg') {
-      await this.rgSearch.search(rgOptions)
-      return
+    try {
+      if (mode === 'rg') {
+        await this.rgSearch.search(rgOptions)
+      } else if (mode === 'vector') {
+        await this.searchVectorOnly(query)
+      } else {
+        await this.autoMode(query, rgOptions)
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new SearchOrchestrator.SearchOrchestratorError(
+          `Search failed: ${error.message}`
+        )
+      }
+      throw error
     }
+  }
 
-    if (mode === 'vector') {
-      await this.searchVectorOnly(query)
-      return
-    }
+  // ========== Private Methods ==========
 
+  private async autoMode(query: string, rgOptions: RgSearchOptions): Promise<void> {
     if (query.trim().split(/\s+/).length > 5) {
       await this.searchVectorOnly(query)
     } else {
@@ -59,7 +87,7 @@ export class SearchOrchestrator {
       console.log(
         `${chalk.green(meta.spaceName)} ${chalk.gray('›')} ${chalk.cyan(
           meta.title
-        )} ${chalk.gray(`(${rel})`)}\\n${chalk.gray(meta.path)}\\n`
+        )} ${chalk.gray(`(${rel})`)}\n${chalk.gray(meta.path)}\n`
       )
     }
   }

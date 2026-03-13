@@ -12,57 +12,33 @@ export interface RgSearchOptions {
 }
 
 export class RgSearch {
-  async search(options: RgSearchOptions): Promise<void> {
-    if (!existsSync(config.exportDir)) {
-      logger.error('No exports directory found. Run "start" command first.')
-      return
+  // ========== Custom Error Classes ==========
+  static readonly RgSearchError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'RgSearchError'
     }
+  }
 
+  static readonly RgNotFoundError = class extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'RgNotFoundError'
+    }
+  }
+
+  async search(options: RgSearchOptions): Promise<void> {
+    this.ensureExportDirExists()
     const args = this.buildRgArgs(options)
+    await this.executeRg(args)
+  }
 
-    return new Promise((resolve, reject) => {
-      const rg = spawn('rg', args, {
-        cwd: config.exportDir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
+  // ========== Private Methods ==========
 
-      let hasResults = false
-
-      rg.stdout.on('data', (data) => {
-        hasResults = true
-        process.stdout.write(data)
-      })
-
-      rg.stderr.on('data', (data) => {
-        const errorMsg = data.toString()
-        if (!errorMsg.includes('No such file or directory')) {
-          process.stderr.write(chalk.red(data))
-        }
-      })
-
-      rg.on('error', (error) => {
-        if (error.message.includes('ENOENT')) {
-          logger.error('ripgrep (rg) not found. Please install it:')
-          logger.info('  macOS: brew install ripgrep')
-          logger.info('  Linux: apt install ripgrep / dnf install ripgrep')
-          logger.info('  Windows: choco install ripgrep / scoop install ripgrep')
-        } else {
-          logger.error(`Search failed: ${error.message}`)
-        }
-        reject(error)
-      })
-
-      rg.on('close', (code) => {
-        if (code === 0 || code === 1) {
-          if (!hasResults && code === 1) {
-            logger.info('No results found.')
-          }
-          resolve()
-        } else {
-          reject(new Error(`rg exited with code ${code}`))
-        }
-      })
-    })
+  private ensureExportDirExists(): void {
+    if (!existsSync(config.exportDir)) {
+      throw new RgSearch.RgSearchError('No exports directory found. Run "start" command first.')
+    }
   }
 
   private buildRgArgs(options: RgSearchOptions): string[] {
@@ -90,7 +66,57 @@ export class RgSearch {
     }
 
     args.push('--type', 'markdown')
-
     return args
+  }
+
+  private executeRg(args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const rg = spawn('rg', args, {
+        cwd: config.exportDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+
+      let hasResults = false
+
+      rg.stdout.on('data', (data) => {
+        hasResults = true
+        process.stdout.write(data)
+      })
+
+      rg.stderr.on('data', (data) => {
+        const errorMsg = data.toString()
+        if (!errorMsg.includes('No such file or directory')) {
+          process.stderr.write(chalk.red(data))
+        }
+      })
+
+      rg.on('error', (error) => {
+        if (error.message.includes('ENOENT')) {
+          reject(new RgSearch.RgNotFoundError(this.getInstallInstructions()))
+        } else {
+          reject(new RgSearch.RgSearchError(`Search failed: ${error.message}`))
+        }
+      })
+
+      rg.on('close', (code) => {
+        if (code === 0 || code === 1) {
+          if (!hasResults && code === 1) {
+            logger.info('No results found.')
+          }
+          resolve()
+        } else {
+          reject(new RgSearch.RgSearchError(`rg exited with code ${code}`))
+        }
+      })
+    })
+  }
+
+  private getInstallInstructions(): string {
+    return (
+      'ripgrep (rg) not found. Please install it:\n' +
+      '  macOS: brew install ripgrep\n' +
+      '  Linux: apt install ripgrep / dnf install ripgrep\n' +
+      '  Windows: choco install ripgrep / scoop install ripgrep'
+    )
   }
 }
