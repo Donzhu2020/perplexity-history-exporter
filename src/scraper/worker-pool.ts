@@ -73,23 +73,23 @@ export class WorkerPool {
   private readonly checkpointManager: CheckpointManager
   private stats: ProcessingStats
   private sharedContext: BrowserContext | null = null
+  private contextLock: Promise<void> | null = null // simple lock for context recreation
+  private browser: Browser // store browser reference
 
-  constructor(checkpointManager: CheckpointManager) {
+  constructor(checkpointManager: CheckpointManager, browser: Browser) {
     this.fileWriter = new FileWriter()
     this.checkpointManager = checkpointManager
     this.stats = this.createEmptyStats()
+    this.browser = browser
   }
 
   // ========== Public API ==========
-  async initialize(browser: Browser): Promise<void> {
+  async initialize(): Promise<void> {
     logger.info(`Initializing worker pool with ${config.parallelWorkers} workers...`)
 
     try {
       // Create a single shared context with saved auth state
-      const storageState = loadAuthState()
-      this.sharedContext = storageState
-        ? await browser.newContext({ storageState })
-        : await browser.newContext()
+      await this.recreateSharedContext()
 
       // Create workers, each sharing the same context
       for (let i = 0; i < config.parallelWorkers; i++) {
@@ -123,6 +123,41 @@ export class WorkerPool {
   }
 
   // ========== Private Methods ==========
+
+  /**
+   * Recreates the shared browser context using the stored auth state.
+   * Uses a lock to prevent multiple concurrent recreations.
+   */
+  private async recreateSharedContext(): Promise<void> {
+    // If a recreation is already in progress, wait for it
+    if (this.contextLock) {
+      await this.contextLock
+      return
+    }
+
+    // Create a new lock promise
+    let resolveLock: () => void
+    this.contextLock = new Promise<void>((resolve) => {
+      resolveLock = resolve
+    })
+
+    try {
+      if (this.sharedContext) {
+        await this.sharedContext.close().catch(() => {})
+      }
+
+      const storageState = loadAuthState()
+      this.sharedContext = storageState
+        ? await this.browser.newContext({ storageState })
+        : await this.browser.newContext()
+
+      logger.info('Shared browser context recreated')
+    } finally {
+      // Release lock
+      resolveLock!()
+      this.contextLock = null
+    }
+  }
 
   /**
    * Creates a single worker that shares the global context.
@@ -182,6 +217,7 @@ export class WorkerPool {
 
   /**
    * Processes a single conversation: delay, extract, validate, save, update stats/checkpoint.
+   * If a context error occurs, attempts to recreate the context and retry once.
    */
   private async processConversation(
     worker: Worker,
@@ -193,7 +229,30 @@ export class WorkerPool {
       await this.randomDelay()
       this.logWorkerStart(worker, conversation)
 
-      const extracted = await this.extractWithErrorHandling(worker, conversation)
+      let extracted: ExtractedConversation | null = null
+      let retried = false
+
+      // Attempt extraction (with one retry on context error)
+      while (true) {
+        try {
+          extracted = await worker.extractor.extract(conversation.url)
+          break // success
+        } catch (error) {
+          const isContextError = this.isContextError(error)
+          if (isContextError && !retried) {
+            logger.warn(`Worker ${worker.id}: context error, attempting to recreate...`)
+            await this.recreateSharedContext()
+            // Update worker's extractor with the new context
+            worker.extractor = new ConversationExtractor(this.sharedContext!)
+            retried = true
+            // Continue loop to retry
+          } else {
+            // Re-throw if not a context error or retry already attempted
+            throw error
+          }
+        }
+      }
+
       if (!extracted) {
         this.handleSkipped(
           worker,
@@ -217,6 +276,19 @@ export class WorkerPool {
   }
 
   /**
+   * Determines if an error is caused by a dead browser context.
+   */
+  private isContextError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return (
+      message.includes('Target page, context or browser has been closed') ||
+      message.includes('Failed to open a new tab') ||
+      message.includes('Protocol error') ||
+      message.includes('browserContext.newPage')
+    )
+  }
+
+  /**
    * Adds a random delay to avoid overwhelming the server.
    */
   private async randomDelay(): Promise<void> {
@@ -237,22 +309,6 @@ export class WorkerPool {
    */
   private logWorkerSuccess(worker: Worker, filepath: string): void {
     logger.success(`Worker ${worker.id} saved: ${filepath}`)
-  }
-
-  /**
-   * Handles extraction with error catching – returns null if extraction returns null,
-   * throws if extraction throws an error.
-   */
-  private async extractWithErrorHandling(
-    worker: Worker,
-    conversation: ConversationMetadata
-  ): Promise<ExtractedConversation | null> {
-    try {
-      return await worker.extractor.extract(conversation.url)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new WorkerPool.ExtractionError(`Extraction failed: ${message}`)
-    }
   }
 
   /**

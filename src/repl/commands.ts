@@ -201,15 +201,11 @@ export class CommandHandler {
       throw new CommandHandler.ScraperError('Browser was not initialized')
     }
 
-    const workerPool = new WorkerPool(this.checkpointManager)
-    await workerPool.initialize(browser)
-
-    try {
-      await workerPool.processConversations(pending)
-      this.checkpointManager.finalSave()
-    } finally {
-      await workerPool.close()
-    }
+    const pool = new WorkerPool(this.checkpointManager, browser)
+    await pool.initialize()
+    await pool.processConversations(pending)
+    await pool.close()
+    await browser.close()
   }
 
   /**

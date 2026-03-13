@@ -99,9 +99,26 @@ export class ConversationExtractor {
   }
 
   // ========== Public API ==========
-
   async extract(url: string): Promise<ExtractedConversation> {
-    const page = await this.context.newPage()
+    // Verify the context is still usable
+    if (!this.context || this.context.pages) {
+      // A simple check: try to get the list of pages – if this throws, context is dead
+      try {
+        await this.context.pages()
+      } catch {
+        throw new ConversationExtractor.ExtractionError('Browser context is no longer available')
+      }
+    }
+
+    let page: Page | null = null
+    try {
+      page = await this.context.newPage()
+    } catch (error) {
+      throw new ConversationExtractor.ExtractionError(
+        `Failed to create new page: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+
     const apiDataPromise = this.waitForApiResponse(page)
 
     try {
@@ -120,13 +137,17 @@ export class ConversationExtractor {
 
       return parsed
     } catch (error) {
+      // Rethrow known errors; wrap unknown ones
       if (error instanceof Error) throw error
       throw new ConversationExtractor.ExtractionError(String(error))
     } finally {
-      await page.close().catch(() => {})
+      if (page) {
+        await page.close().catch((e) => {
+          logger.warn(`Failed to close page: ${e}`)
+        })
+      }
     }
   }
-
   // ========== Private Helpers ==========
 
   private waitForApiResponse(page: Page): Promise<any> {
