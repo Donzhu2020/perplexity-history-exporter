@@ -19,7 +19,9 @@ export class RagOrchestrator {
       const relevantChunks = await this.vectorStore.search(question, 5)
 
       if (relevantChunks.length === 0) {
-        logger.warn('No relevant context found in your exports. Attempting to answer without context...')
+        logger.warn(
+          'No relevant context found in your exports. Attempting to answer without context...'
+        )
       }
 
       const prompt = this.constructRagPrompt(question, relevantChunks)

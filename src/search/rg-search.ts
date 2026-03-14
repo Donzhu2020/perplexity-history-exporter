@@ -34,7 +34,9 @@ export class RgSearch {
 
   private ensureExportDirectoryIsAccessible(): void {
     if (!existsSync(config.exportDir)) {
-      throw new RgSearch.RgSearchError('No exports directory found. Please run the "start" command first to export your history.')
+      throw new RgSearch.RgSearchError(
+        'No exports directory found. Please run the "start" command first to export your history.'
+      )
     }
   }
 
