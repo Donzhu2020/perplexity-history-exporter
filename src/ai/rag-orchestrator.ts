@@ -18,34 +18,41 @@ export class RagOrchestrator {
   }
 
   async answerQuestion(question: string): Promise<void> {
-    logger.info(`Mightiest RAG analyzing request: "${question}"`)
+    logger.info(`Mightiest Adaptive RAG processing: "${question}"`)
 
     try {
-      const plan = await this.developExecutionPlan(question)
-      logger.info(`Strategy: ${chalk.bold.yellow(plan.strategy.toUpperCase())}`)
-      logger.info(`Search Variations: ${chalk.gray(plan.queries.join(' | '))}`)
-
-      const searchResults = await this.executeHybridSearch(plan)
-
-      if (searchResults.length === 0) {
-        logger.warn('History is silent on this topic. Using core AI knowledge.')
+      const researchPlan = await this.developResearchPlan(question)
+      logger.info(`Plan: ${chalk.bold.yellow(researchPlan.strategy.toUpperCase())}`)
+      if (researchPlan.hardKeywords?.length) {
+        logger.info(`Hard Keywords detected: ${chalk.gray(researchPlan.hardKeywords.join(', '))}`)
       }
 
-      const exhaustiveMode = plan.strategy === 'exhaustive'
-      const contextFacts = await this.extractFactsWithGranularMapReduce(question, searchResults, exhaustiveMode)
+      const searchCandidates = await this.executeAdaptiveHybridSearch(researchPlan)
 
-      logger.info(`Synthesizing final answer from ${contextFacts.length} verified facts...`)
-      const finalAnswer = await this.generateMightiestResponse(question, contextFacts, plan.strategy)
+      logger.info(`Analyzing ${searchCandidates.length} potential conversation segments...`)
+      const intermediateFindings = await this.performDeepResearch(question, searchCandidates, researchPlan.strategy)
+
+      const gapAnalysis = await this.performGapAnalysis(question, intermediateFindings)
+      if (gapAnalysis.gapsFound && gapAnalysis.followUpQueries.length > 0) {
+        logger.info(`Information Gap! Triggering secondary research phase...`)
+        const followUpResults = await this.executeAdaptiveHybridSearch({
+          queries: gapAnalysis.followUpQueries,
+          hardKeywords: gapAnalysis.followUpKeywords,
+          filters: researchPlan.filters
+        })
+        const followUpFindings = await this.performDeepResearch(question, followUpResults, researchPlan.strategy)
+        intermediateFindings.push(...followUpFindings)
+      }
+
+      logger.info(`Final synthesis from ${intermediateFindings.length} verified research nodes...`)
+      const finalResponse = await this.narrateMightiestAnswer(question, intermediateFindings, researchPlan.strategy)
 
       console.log(`\n${chalk.bold.green('Mightiest AI Response:')}\n`)
-      console.log(finalAnswer)
+      console.log(finalResponse)
 
-      this.displaySourceList(contextFacts)
+      this.displaySourceProvenance(intermediateFindings)
 
-      const feedback = await this.verifyAnswerQuality(question, finalAnswer, contextFacts)
-      if (feedback.status === 'improvement-needed') {
-        logger.warn(`Self-Correction: ${chalk.gray(feedback.suggestion)}`)
-      }
+      await this.performSelfVerification(question, finalResponse)
 
     } catch (_error) {
       const errorMessage = _error instanceof Error ? _error.message : String(_error)
@@ -53,69 +60,44 @@ export class RagOrchestrator {
     }
   }
 
-  private async developExecutionPlan(originalQuestion: string): Promise<{
-    strategy: 'precise' | 'exhaustive';
-    queries: string[];
-    keywords: string[];
-    filters: any;
-  }> {
+  private async developResearchPlan(originalQuestion: string): Promise<any> {
     const plannerPrompt = `
-Analyze the user request: "${originalQuestion}"
-Decide the best RAG strategy:
-- "precise": The user wants a specific fact, code snippet, or a direct answer to a narrow question.
-- "exhaustive": The user wants to know everything said about a topic, a summary of all threads, or a broad overview where missing one detail would be a failure.
-
-Generate:
-1. strategy: "precise" or "exhaustive"
-2. queries: 3 semantic search variations.
-3. keywords: 3-5 exact keywords for ripgrep (focus on names, unique technical terms).
-4. filters: Any mentioned thread titles or space names.
-
-Return EXACTLY JSON:
-{
-  "strategy": "precise" | "exhaustive",
-  "queries": ["q1", "q2", "q3"],
-  "keywords": ["k1", "k2", "k3"],
-  "filters": { "title": "...", "space": "..." }
-}
+Analyze: "${originalQuestion}"
+1. Strategy: "precise" (specific facts) or "exhaustive" (broad summary/entity history).
+2. Variations: 3 semantic search phrases.
+3. Hard Keywords: Identify any names, IDs, or unique technical terms for exact matching.
+Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {}}
 `
     try {
       const response = await this.ollamaClient.generate(plannerPrompt)
-      const json = JSON.parse(response.match(/\{[\s\S]*\}/)?.[0] || '{}')
-      return {
-        strategy: json.strategy || 'precise',
-        queries: json.queries || [originalQuestion],
-        keywords: json.keywords || [],
-        filters: json.filters || {}
-      }
+      return JSON.parse(response.match(/\{[\s\S]*\}/)?.[0] || '{}')
     } catch (_err) {
-      return { strategy: 'precise', queries: [originalQuestion], keywords: [], filters: {} }
+      return { strategy: 'precise', queries: [originalQuestion], hardKeywords: [], filters: {} }
     }
   }
 
-  private async executeHybridSearch(plan: any): Promise<VectorSearchResult[]> {
-    const resultsPool: VectorSearchResult[][] = []
+  private async executeAdaptiveHybridSearch(plan: any): Promise<VectorSearchResult[]> {
+    const searchPools: VectorSearchResult[][] = []
 
-    for (const q of plan.queries) {
+    for (const q of plan.queries || []) {
       const res = await this.vectorStore.search(q, 40)
-      resultsPool.push(res)
+      searchPools.push(res)
     }
 
-    for (const k of plan.keywords) {
+    for (const k of plan.hardKeywords || []) {
       try {
         const matches = await this.ripgrep.captureSearchMatches({ pattern: k })
-        const converted = matches.map(m => ({
-          meta: { path: join(config.exportDir, m.path), snippet: m.text, title: m.path.split('/').pop() || 'Untitled', id: m.path + m.line },
+        searchPools.push(matches.map(m => ({
+          meta: { path: join(config.exportDir, m.path), snippet: m.text, title: m.path.split('/').pop() || 'Untitled' },
           score: 1.0
-        }))
-        resultsPool.push(converted as any)
+        })) as any)
       } catch (_err) { /* oxlint-disable-next-line no-empty */ }
     }
 
-    return this.reciprocalRankFusion(resultsPool)
+    return this.mergeAndFusionRank(searchPools)
   }
 
-  private reciprocalRankFusion(pools: VectorSearchResult[][]): VectorSearchResult[] {
+  private mergeAndFusionRank(pools: VectorSearchResult[][]): VectorSearchResult[] {
     const scores = new Map<string, { res: VectorSearchResult; score: number }>()
     pools.forEach(pool => {
       pool.forEach((res, rank) => {
@@ -130,82 +112,97 @@ Return EXACTLY JSON:
     return Array.from(scores.values()).sort((a, b) => b.score - a.score).map(v => v.res)
   }
 
-  private async extractFactsWithGranularMapReduce(question: string, results: VectorSearchResult[], exhaustive: boolean): Promise<any[]> {
-    const poolLimit = exhaustive ? 60 : 20
-    const pool = results.slice(0, poolLimit)
+  private async performDeepResearch(question: string, candidates: VectorSearchResult[], strategy: string): Promise<any[]> {
+    const limit = strategy === 'exhaustive' ? 60 : 25
+    const pool = candidates.slice(0, limit)
     if (pool.length === 0) return []
 
-    const chunkSize = 5
-    const factBatches: any[][] = []
+    const findings: any[] = []
+    const batchSize = 10
 
-    logger.info(`Processing ${pool.length} context snippets in batches of ${chunkSize}...`)
+    for (let i = 0; i < pool.length; i += batchSize) {
+      const batch = pool.slice(i, i + batchSize)
+      const researchPrompt = `
+You are the Researcher. Analyze these snippets from the user's history for the question: "${question}"
+Context:
+${batch.map((r, j) => `[Node ${i + j}] ${r.meta['title']}: ${r.meta['snippet']}`).join('\n\n')}
 
-    for (let i = 0; i < pool.length; i += chunkSize) {
-      const chunk = pool.slice(i, i + chunkSize)
-      const batchPrompt = `
-Question: "${question}"
-Context Snippets:
-${chunk.map((r, j) => `[ID ${j}] Thread: ${r.meta['title']}\nSnippet: ${r.meta['snippet']}`).join('\n\n')}
-
-Extract every specific fact, detail, or mention relevant to the question.
-Include technical terms, dates, and names.
-Return as JSON array: [{"fact": "...", "source_title": "..."}]
+Extract every specific fact, mention, date, or piece of code.
+Return JSON array: [{"fact": "...", "node_id": N, "thread": "..."}]
 `
       try {
-        const response = await this.ollamaClient.generate(batchPrompt)
-        const facts = JSON.parse(response.match(/\[[\s\S]*\]/)?.[0] || '[]')
-        factBatches.push(facts)
+        const response = await this.ollamaClient.generate(researchPrompt)
+        const extracted = JSON.parse(response.match(/\[[\s\S]*\]/)?.[0] || '[]')
+        extracted.forEach((f: any) => {
+          findings.push({ ...f, original: pool[f.node_id - i] })
+        })
       } catch (_err) {
-        factBatches.push(chunk.map(r => ({ fact: r.meta['snippet'], source_title: r.meta['title'] })))
+        batch.forEach((r, j) => findings.push({ fact: r.meta['snippet'], node_id: i + j, thread: r.meta['title'], original: r }))
       }
     }
 
-    return factBatches.flat()
+    return findings
   }
 
-  private async generateMightiestResponse(question: string, facts: any[], strategy: string): Promise<string> {
-    const factsList = facts.map((f, i) => `[Fact ${i}] (${f.source_title}): ${f.fact}`).join('\n')
-
+  private async performGapAnalysis(question: string, findings: any[]): Promise<any> {
     const prompt = `
-SYSTEM: You are the MIGHTIEST personal assistant. You have absolute mastery over the user's Perplexity history.
-STRATEGY: ${strategy}
-
-ALL RELEVANT FACTS EXTRACTED FROM HISTORY:
-${factsList || 'No relevant facts found in history.'}
-
-USER QUESTION: "${question}"
-
-INSTRUCTIONS:
-1. Provide a definitive, detailed answer.
-2. If STRATEGY is "exhaustive", you MUST mention every unique thread and fact found. Do not summarize away important details.
-3. Use Chain-of-Thought reasoning to connect dots across different conversations.
-4. Cite sources using [Fact N].
-5. If something is missing from history, state it clearly before using your general knowledge.
-
-ANSWER:`
-    return this.ollamaClient.generate(prompt)
-  }
-
-  private displaySourceList(facts: any[]): void {
-    const uniqueThreads = new Set(facts.map(f => f.source_title))
-    if (uniqueThreads.size > 0) {
-      console.log(`\n${chalk.bold.cyan('History Sources Explored:')}`)
-      uniqueThreads.forEach(t => console.log(` - ${t}`))
-    }
-  }
-
-  private async verifyAnswerQuality(question: string, answer: string, facts: any[]): Promise<{ status: string; suggestion?: string }> {
-    const prompt = `
-Question: "${question}"
-Facts: ${facts.length}
-Answer: "${answer.slice(0, 500)}..."
-
-Check: Did the answer overlook any of the facts?
-Return JSON: {"status": "ok" | "improvement-needed", "suggestion": "..."}
+Based on history findings: ${findings.slice(0, 10).map(f => f.fact).join('; ')}
+What's missing for the question: "${question}"?
+Return JSON: {"gapsFound": boolean, "followUpQueries": [], "followUpKeywords": []}
 `
     try {
       const res = await this.ollamaClient.generate(prompt)
-      return JSON.parse(res.match(/\{[\s\S]*\}/)?.[0] || '{"status": "ok"}')
-    } catch (_err) { return { status: 'ok' } }
+      return JSON.parse(res.match(/\{[\s\S]*\}/)?.[0] || '{"gapsFound": false}')
+    } catch (_err) { return { gapsFound: false } }
+  }
+
+  private async narrateMightiestAnswer(question: string, findings: any[], strategy: string): Promise<string> {
+    const prompt = `
+You are the Narrator. Synthesize these research findings into a cohesive, mightiest answer for: "${question}"
+Strategy: ${strategy}
+Findings:
+${findings.map((f, i) => `[Find ${i}] (${f.thread}): ${f.fact}`).join('\n')}
+
+INSTRUCTIONS:
+1. Provide a comprehensive, authoritative response.
+2. If "exhaustive", list ALL relevant conversations and what they contributed.
+3. Be specific with names and technical details.
+4. Cite everything with [Find N].
+
+ANSWER:
+`
+    return this.ollamaClient.generate(prompt)
+  }
+
+  private async performSelfVerification(question: string, answer: string): Promise<void> {
+    const prompt = `
+Verify the answer.
+Question: "${question}"
+Answer: "${answer.slice(0, 500)}..."
+Did I miss anything important?
+Return JSON: {"status": "ok" | "missed-info", "suggestion": "..."}
+`
+    try {
+      const res = await this.ollamaClient.generate(prompt)
+      const feedback = JSON.parse(res.match(/\{[\s\S]*\}/)?.[0] || '{"status": "ok"}')
+      if (feedback.status === 'missed-info') {
+        logger.warn(`Verification Note: ${chalk.gray(feedback.suggestion)}`)
+      }
+    } catch (_err) { /* oxlint-disable-next-line no-empty */ }
+  }
+
+  private displaySourceProvenance(findings: any[]): void {
+    const threadMap = new Map()
+    findings.forEach(f => {
+      const title = f.thread || f.original?.meta?.title || 'Untitled'
+      const path = f.original?.meta?.path || 'unknown'
+      threadMap.set(title, path)
+    })
+    if (threadMap.size > 0) {
+      console.log(`\n${chalk.bold.cyan('History Sources Analyzed:')}`)
+      for (const [title, path] of threadMap) {
+        console.log(` - ${title} (${chalk.gray(path)})`)
+      }
+    }
   }
 }
