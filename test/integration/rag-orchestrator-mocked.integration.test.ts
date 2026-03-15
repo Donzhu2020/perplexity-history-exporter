@@ -38,10 +38,10 @@ const mswServer = setupServer(
     }
 
     return HttpResponse.json({
-      model: 'deepseek-r1',
+      model: config.ollamaModel,
       created_at: new Date().toISOString(),
       response: responseText,
-      done: true,
+      done: true
     })
   })
 )

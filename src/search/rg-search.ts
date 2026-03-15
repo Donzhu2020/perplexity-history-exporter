@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 import { config } from '../utils/config.js'
 import { logger } from '../utils/logger.js'
 import chalk from 'chalk'
@@ -41,33 +42,65 @@ export class RgSearch {
   async captureSearchMatches(options: RgSearchOptions): Promise<RgMatch[]> {
     this.ensureExportDirectoryIsAccessible()
     const args = this.constructRipgrepArguments(options)
-    // Remove color for easier parsing
-    const cleanArgs = args.filter((a) => a !== '--color=always').concat(['--color=never', '--json'])
+    const cleanArgs = args.filter((a) => a !== '--color=always').concat([
+      '--color=never',
+      '--json',
+      '--max-filesize', '1M',
+      '--no-binary'
+    ])
 
     return new Promise((resolve, reject) => {
+      const MAX_MATCHES_PER_KEYWORD = 100
+      const TIMEOUT_MS = 30000
+      const matches: RgMatch[] = []
       const rg = spawn('rg', cleanArgs, { cwd: config.exportDir })
-      let output = ''
 
-      rg.stdout.on('data', (data) => (output += data.toString()))
-      rg.on('error', (err) => reject(err))
-      rg.on('close', () => {
-        const matches: RgMatch[] = []
-        output.split('\n').forEach((line) => {
-          try {
-            if (!line) return
-            const parsed = JSON.parse(line)
-            if (parsed.type === 'match') {
-              matches.push({
-                path: parsed.data.path.text,
-                line: parsed.data.line_number,
-                text: parsed.data.lines.text,
-              })
-            }
-          } catch (_err) {
-            /* ignore */
+      const timeout = setTimeout(() => {
+        logger.warn(`Ripgrep search for "${options.pattern}" timed out after ${TIMEOUT_MS/1000}s. Killing process.`)
+        rg.kill('SIGKILL')
+      }, TIMEOUT_MS)
+
+      const rl = createInterface({
+        input: rg.stdout,
+        terminal: false,
+      })
+
+      rl.on('line', (line) => {
+        if (matches.length >= MAX_MATCHES_PER_KEYWORD) {
+          rg.kill()
+          return
+        }
+
+        try {
+          const parsed = JSON.parse(line)
+          if (parsed.type === 'match') {
+            matches.push({
+              path: parsed.data.path.text,
+              line: parsed.data.line_number,
+              text: parsed.data.lines.text,
+            })
           }
-        })
-        resolve(matches)
+        } catch (_err) {
+          /* ignore */
+        }
+      })
+
+      rg.stderr.on('data', () => {})
+
+      rg.on('error', (err) => {
+        clearTimeout(timeout)
+        rl.close()
+        reject(err)
+      })
+
+      rg.on('close', (code) => {
+        clearTimeout(timeout)
+        rl.close()
+        if (code === 0 || code === 1 || code === null || rg.killed) {
+          resolve(matches)
+        } else {
+          reject(new RgSearch.RgSearchError(`ripgrep exited with code ${code}`))
+        }
       })
     })
   }
