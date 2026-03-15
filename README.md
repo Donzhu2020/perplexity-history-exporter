@@ -4,6 +4,22 @@ Export your Perplexity conversation history to local Markdown files, then search
 
 This repository is based on the original project [simwai/perplexity-ai-export](https://github.com/simwai/perplexity-ai-export), with additional reliability, login-flow, and usability changes.
 
+## Credits
+
+- Original project: [simwai/perplexity-ai-export](https://github.com/simwai/perplexity-ai-export)
+- This repository keeps the original core idea and extends it with workflow and reliability improvements for local export usage.
+
+## Changes from Upstream
+
+Compared with the original upstream project, this version adds and changes:
+
+- a more reliable manual login flow that does not depend on a terminal confirmation prompt,
+- stricter login detection to reduce false positives,
+- a longer manual-login window before automated checks begin,
+- safer checkpoint behavior when discovery returns zero conversations,
+- background extraction fallback logic so long exports do not always keep a visible browser in front,
+- a more practical README that explains the purpose, design choices, and local-data safety model.
+
 ## What It Does
 
 - Logs into Perplexity through a real browser session.
