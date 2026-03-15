@@ -88,6 +88,11 @@ npx playwright install chromium
 cp .env.example .env
 ```
 
+Quick-start helpers in the repo:
+
+- `./setup-and-run.sh`: install dependencies, install Playwright Chromium, then launch the CLI
+- `python3 run_scraper.py`: launch the CLI and auto-select `Start scraper (Library)` without auto-confirming login
+
 ## Important Config
 
 Common environment variables:
@@ -107,6 +112,13 @@ Run the CLI:
 
 ```bash
 npm run dev
+```
+
+Or use the included helpers:
+
+```bash
+./setup-and-run.sh
+python3 run_scraper.py
 ```
 
 Menu options:

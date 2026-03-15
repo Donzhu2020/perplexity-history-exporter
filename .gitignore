@@ -4,6 +4,7 @@ dist/
 exports/
 coverage/
 .DS_Store
+__pycache__/
 
 .env
 *.log
