@@ -28,25 +28,33 @@ async function main() {
     alias: {
       '@playwright/test': 'playwright-core',
     },
-    // Mocking require.resolve to avoid playwright-core looking for package.json
+    // Mocking require.resolve to avoid playwright-core looking for internal files that aren't bundled
     banner: {
       js: `
 const { createRequire } = require('module');
 const path = require('path');
 const require_ = createRequire(process.cwd() + '/index.js');
-if (!require.resolve) {
-  require.resolve = (id) => {
-    if (id.includes('package.json')) return path.resolve(process.cwd(), 'package.json');
+const originalResolve = require.resolve;
+require.resolve = (id, options) => {
+  if (id.includes('package.json')) return path.resolve(process.cwd(), 'package.json');
+  if (id.includes('appIcon.png')) return path.resolve(process.cwd(), 'appIcon.png');
+  if (id.includes('./loader')) return path.resolve(process.cwd(), 'loader.js');
+  try {
+    return originalResolve(id, options);
+  } catch (e) {
     try {
-        return require_.resolve(id);
-    } catch (e) {
-        return id;
+      return require_.resolve(id, options);
+    } catch (e2) {
+      return id;
     }
-  };
-}
+  }
+};
 `,
     },
     external: ['fsevents'],
+    logOverride: {
+      'require-resolve-not-external': 'silent',
+    },
   })
 
   console.log('--- Generating SEA preparation blob ---')
