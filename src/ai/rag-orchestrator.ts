@@ -26,7 +26,9 @@ export class RagOrchestrator {
 
       logger.info(`Plan: ${chalk.bold.yellow(researchPlan.strategy.toUpperCase())}`)
       if (exhaustiveMode) {
-        logger.warn(`Exhaustive mode enabled. This may take a while as I'll be doing a deep dive into your history.`)
+        logger.warn(
+          `Exhaustive mode enabled. This may take a while as I'll be doing a deep dive into your history.`
+        )
       }
 
       if (researchPlan.hardKeywords?.length) {
@@ -34,7 +36,6 @@ export class RagOrchestrator {
       }
 
       const searchResults = await this.executeAdaptiveHybridSearch(researchPlan)
-
       const contextFacts = await this.extractFactsWithGranularMapReduce(
         question,
         searchResults,
