@@ -147,7 +147,7 @@ export class BrowserManager {
     const perplexitySettingsUrl = 'https://www.perplexity.ai/settings'
     try {
       await this.activePage.goto(perplexitySettingsUrl, {
-        waitUntil: 'networkidle',
+        timeout: 3000,
       })
     } catch (_error) {
       throw new BrowserManager.NavigationError(
