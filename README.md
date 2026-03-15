@@ -2,6 +2,8 @@
 
 Export your Perplexity conversation history to local Markdown files, then search it with exact match, semantic search, or RAG.
 
+This repository is based on the original project [simwai/perplexity-ai-export](https://github.com/simwai/perplexity-ai-export), with additional reliability, login-flow, and usability changes.
+
 ## What It Does
 
 - Logs into Perplexity through a real browser session.
