@@ -6,3 +6,4 @@ exports/
 *.log
 .aider*
 *.old
+exports*
