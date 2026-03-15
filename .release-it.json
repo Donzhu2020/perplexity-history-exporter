@@ -1,7 +1,12 @@
 {
   "github": {
     "release": true,
-    "assets": ["dist/perplexity-history-export.exe", "dist/perplexity-history-export", "README.md", "LICENSE"]
+    "assets": [
+      "dist/perplexity-history-export.exe",
+      "dist/perplexity-history-export",
+      "README.md",
+      "LICENSE"
+    ]
   },
   "git": {
     "commitMessage": "chore: release v${version}",

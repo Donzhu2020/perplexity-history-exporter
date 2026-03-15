@@ -42,12 +42,9 @@ export class RgSearch {
   async captureSearchMatches(options: RgSearchOptions): Promise<RgMatch[]> {
     this.ensureExportDirectoryIsAccessible()
     const args = this.constructRipgrepArguments(options)
-    const cleanArgs = args.filter((a) => a !== '--color=always').concat([
-      '--color=never',
-      '--json',
-      '--max-filesize', '1M',
-      '--no-binary'
-    ])
+    const cleanArgs = args
+      .filter((a) => a !== '--color=always')
+      .concat(['--color=never', '--json', '--max-filesize', '1M', '--no-binary'])
 
     return new Promise((resolve, reject) => {
       const MAX_MATCHES_PER_KEYWORD = 100
@@ -56,7 +53,9 @@ export class RgSearch {
       const rg = spawn('rg', cleanArgs, { cwd: config.exportDir })
 
       const timeout = setTimeout(() => {
-        logger.warn(`Ripgrep search for "${options.pattern}" timed out after ${TIMEOUT_MS/1000}s. Killing process.`)
+        logger.warn(
+          `Ripgrep search for "${options.pattern}" timed out after ${TIMEOUT_MS / 1000}s. Killing process.`
+        )
         rg.kill('SIGKILL')
       }, TIMEOUT_MS)
 
