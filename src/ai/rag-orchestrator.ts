@@ -34,7 +34,6 @@ export class RagOrchestrator {
       }
 
       const searchResults = await this.executeAdaptiveHybridSearch(researchPlan)
-      const exhaustiveMode = researchPlan.strategy === 'exhaustive'
 
       const contextFacts = await this.extractFactsWithGranularMapReduce(
         question,
