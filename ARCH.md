@@ -8,13 +8,13 @@ This document elucidates the architectural blueprints and theoretical underpinni
 
 - [1. High-Level Flow Diagram](#1-high-level-flow-diagram)
 - [2. RAG Cognitive Structure](#2-rag-cognitive-structure)
-  - [Stage A: Adaptive Planning](#stage-a-adaptive-planning)
-  - [Stage B: Hybrid Retrieval & Fusion](#stage-b-hybrid-retrieval--fusion)
-  - [Stage C: Granular MapReduce Fact Extraction](#stage-c-granular-mapreduce-fact-extraction)
+  * [Stage A: Adaptive Planning](#stage-a-adaptive-planning)
+  * [Stage B: Hybrid Retrieval & Fusion](#stage-b-hybrid-retrieval--fusion)
+  * [Stage C: Granular MapReduce Fact Extraction](#stage-c-granular-mapreduce-fact-extraction)
 - [3. Theoretical Foundations](#3-theoretical-foundations)
-  - [Hybrid Search & RRF](#hybrid-search--rrf)
-  - [Retrieval-Augmented Generation (RAG)](#retrieval-augmented-generation-rag)
-  - [MapReduce for Context Compression](#mapreduce-for-context-compression)
+  * [Hybrid Search & RRF](#hybrid-search--rrf)
+  * [Retrieval-Augmented Generation (RAG)](#retrieval-augmented-generation-rag)
+  * [MapReduce for Context Compression](#mapreduce-for-context-compression)
 - [4. Visualizing the Retrieval Loop](#4-visualizing-the-retrieval-loop)
 
 <!-- tocstop -->
