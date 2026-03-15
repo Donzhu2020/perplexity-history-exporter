@@ -1,159 +1,144 @@
-<p align="center">
-  <img src="docs/header.svg" width="100%" alt="Perplexity History Export Header" />
-</p>
+# Perplexity History Exporter
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Node.js-4c1d95?style=flat&logo=node.js&logoColor=white" alt="Node.js" />
-  <img src="https://img.shields.io/badge/TypeScript-5b21b6?style=flat&logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Ollama-6d28d9?style=flat&logo=ollama&logoColor=white" alt="Ollama" />
-  <img src="https://img.shields.io/badge/Playwright-7c3aed?style=flat&logo=playwright&logoColor=white" alt="Playwright" />
-  <img src="https://img.shields.io/badge/Vitest-8b5cf6?style=flat&logo=vitest&logoColor=white" alt="Vitest" />
-</p>
+Export your Perplexity conversation history to local Markdown files, then search it with exact match, semantic search, or RAG.
 
----
+## What It Does
 
-<!-- toc -->
+- Logs into Perplexity through a real browser session.
+- Discovers conversations from your Perplexity library.
+- Exports each conversation as a Markdown file under `exports/`.
+- Saves progress so interrupted runs can resume.
+- Supports exact search with ripgrep.
+- Supports semantic search and RAG with Ollama.
 
-- [Introduction](#introduction)
-- [Key Features](#key-features)
-- [Environment Setup Guide](#environment-setup-guide)
-  * [1. Install Node.js (The Engine)](#1-install-nodejs-the-engine)
-  * [2. Install Ollama (The AI Intelligence)](#2-install-ollama-the-ai-intelligence)
-  * [3. Download and Prepare the Project](#3-download-and-prepare-the-project)
-- [Configuration](#configuration)
-  * [Key Environment Variables](#key-environment-variables)
-- [Usage Guide](#usage-guide)
-  * [Operational Directives](#operational-directives)
-- [RAG Capabilities](#rag-capabilities)
-- [Architecture & Deep Dive](#architecture--deep-dive)
-  * [Project Structure](#project-structure)
-- [Testing](#testing)
+## Why This Exists
 
-<!-- tocstop -->
+Perplexity is great for exploration, but conversation history is not ideal as a long-term personal knowledge base. This project turns those conversations into local files you control so you can:
 
----
+- keep a durable archive of your research,
+- search across old threads quickly,
+- build a private knowledge base on your own machine,
+- use local models to ask questions across your history.
 
-## Introduction
+## Why The Current Design Looks Like This
 
-This tool is designed to externalize your Perplexity.ai conversation history into organized, semantically searchable Markdown files. It facilitates the emergence of a personal knowledge base powered by local AI, bridging the gap between ephemeral inquiry and structured knowledge.
+This code uses Playwright, checkpoints, and optional local AI on purpose:
 
-## Key Features
+- Playwright is used because Perplexity history is tied to an authenticated browser session.
+- Checkpoints are used because large exports can take time and should be resumable.
+- Markdown exports are used because they are portable, easy to inspect, and work well with search tools.
+- Ollama integration is optional so the basic export flow works even if you only want a local archive.
 
-- **Parallelized Extraction**: Leverages Playwright to extract multiple conversation threads simultaneously for high-velocity data retrieval.
-- **Architectural Resilience**: Automatically restores browser contexts and retries operations, ensuring continuity amidst environmental instability.
-- **Advanced RAG (Retrieval-Augmented Generation)**: Engage in a cognitive dialogue with your history. The system employs intent analysis to synthesize broad summaries or pinpoint specific technical insights.
-- **Semantic Vector Search**: Move beyond keyword matching. Locate information based on conceptual depth and semantic relevance.
-- **Persistent State Tracking**: Frequent checkpoints allow the system to resume progress after any interruption.
-- **Interactive Synthesis (REPL)**: A streamlined command-line interface for human-system synergy.
+Recent reliability fixes were added for real-world usage:
 
-## Environment Setup Guide
+- Manual login now waits in the browser instead of relying on a fragile terminal confirmation.
+- Login detection is stricter, which avoids false positives and early browser shutdown.
+- Discovery no longer gets stuck in an empty-complete checkpoint state.
+- After interactive login, extraction can switch to background mode so the browser does not block your desktop the whole time.
+- If background mode cannot reuse auth safely, the exporter falls back to visible mode instead of failing hard.
 
-If you are new to development or don't have the necessary tools installed, follow these steps to set up your environment.
+## How It Works
 
-### 1. Install Node.js (The Engine)
+1. Start the CLI.
+2. Choose `Start scraper (Library)`.
+3. Log into Perplexity in the opened browser if needed.
+4. The tool discovers your conversations.
+5. It exports pending conversations to `exports/`.
+6. You can later search or vectorize the exported files.
 
-We recommend using a version manager to install Node.js. This allows you to easily switch versions and avoids permission issues.
+## Project Structure
 
-- **Windows**:
-  1. Download and run the latest installer from [nvm-windows](https://github.com/coreybutler/nvm-windows/releases).
-  2. Open a new Command Prompt or PowerShell and run:
-     ```cmd
-     nvm install 20
-     nvm use 20
-     ```
-- **macOS / Linux**:
-  1. Install `nvm` by following the instructions at [nvm.sh](https://github.com/nvm-sh/nvm).
-  2. Run:
-     ```bash
-     nvm install 20
-     nvm use 20
-     ```
+- `src/scraper/`: browser automation, discovery, extraction, checkpoints
+- `src/export/`: Markdown writing and filename sanitizing
+- `src/search/`: exact and semantic search orchestration
+- `src/ai/`: Ollama client and RAG logic
+- `src/repl/`: CLI menu and command flow
+- `src/utils/`: config, logging, waiting strategies
 
-### 2. Install Ollama (The AI Intelligence)
+## Requirements
 
-1. Download and install Ollama from [ollama.ai](https://ollama.ai).
-2. Open your terminal and pull the required models:
-   ```bash
-   ollama pull nomic-embed-text
-   ollama pull deepseek-r1
-   ```
+- Node.js 20 or newer recommended
+- npm
+- Playwright Chromium
+- Ollama only if you want semantic search or RAG
 
-### 3. Download and Prepare the Project
-
-If you don't have the `git` command installed, you can simply download this project as a ZIP file from GitHub and extract it.
-
-Once extracted, open your terminal in the project folder and run:
+## Setup
 
 ```bash
 npm install
 npx playwright install chromium
-```
-
-## Configuration
-
-Establish your environment by duplicating the template:
-
-```bash
 cp .env.example .env
 ```
 
-### Key Environment Variables
+## Important Config
 
-- **OLLAMA_URL**: Access point for your local AI engine (default: http://localhost:11434).
-- **OLLAMA_MODEL**: Cognitive model for RAG synthesis (e.g., deepseek-r1).
-- **OLLAMA_EMBED_MODEL**: Model for generating vector representations (e.g., nomic-embed-text).
-- **ENABLE_VECTOR_SEARCH**: Set to `true` to activate semantic and RAG layers.
+Common environment variables:
 
-## Usage Guide
+- `AUTH_STORAGE_PATH`: where login state is stored
+- `EXPORT_DIR`: where Markdown exports are written
+- `CHECKPOINT_PATH`: where progress state is stored
+- `HEADLESS`: `true`, `false`, or `new`
+- `ENABLE_VECTOR_SEARCH`: set to `true` to enable semantic search
+- `OLLAMA_URL`: Ollama server URL
+- `OLLAMA_MODEL`: generation model for RAG
+- `OLLAMA_EMBED_MODEL`: embedding model for vector search
 
-Launch the system:
+## Usage
+
+Run the CLI:
 
 ```bash
-# Start the development environment
 npm run dev
 ```
 
-### Operational Directives
+Menu options:
 
-- **Start scraper (Library)**: Initiates extraction. Authenticate manually if required.
-- **Search conversations**: Interface with your history using various modes:
-  - **Auto**: Heuristic selection between semantic and exact search.
-  - **Semantic**: Fuzzy matching via high-dimensional vector space.
-  - **RAG**: Direct inquiry—e.g., "What did I learn about emergent intelligence?"
-  - **Exact**: Rapid string matching via ripgrep (bundled).
-- **Build vector index**: Processes Markdown exports into a local vector store.
-- **Reset all data**: Purges checkpoints, authentication data, and the vector index.
+- `Start scraper (Library)`: discover and export conversations
+- `Search conversations`: search exported history
+- `Build vector index`: build embeddings for semantic search
+- `Reset all data`: clear auth cache, checkpoint state, and vector index
+- `Help`: show command help
 
-## RAG Capabilities
+## Background Extraction
 
-The RAG modality is engineered for various levels of cognitive inquiry:
+To keep login reliable, the tool opens a visible browser for manual authentication when needed.
 
-- **Broad Synthesis**: "Summarize all threads regarding distributed systems."
-- **Granular Retrieval**: "Locate the specific TypeScript pattern I used for the worker pool."
-- **Cross-Thread Integration**: "How has my conceptual understanding of React hooks shifted?"
+After login and discovery:
 
-## Architecture & Deep Dive
+- extraction will try to continue in background mode if headless mode is enabled,
+- if Perplexity rejects the background session, the tool falls back to visible mode automatically.
 
-For a detailed look at our RAG implementation, hybrid search strategy, and theoretical foundations, please refer to:
+This is meant to balance reliability with convenience.
 
-👉 **[ARCH.md](./ARCH.md)**
+## Search Modes
 
-### Project Structure
+- `Exact`: fast text search over exported Markdown
+- `Semantic`: embedding-based search with Ollama + Vectra
+- `RAG`: ask questions across your history using local models
+- `Auto`: choose between exact and semantic behavior heuristically
 
-- **src/ai/**: Ollama interaction and advanced RAG orchestration layers.
-- **src/scraper/**: Playwright-based extraction logic and parallel worker pool management.
-- **src/search/**: Vector storage (Vectra) and ripgrep search implementation.
-- **src/repl/**: Interactive CLI components.
-- **src/utils/**: Shared utility functions for data chunking and logging.
+## Data Safety
 
-## Testing
+This repo is set up so local private data stays local:
 
-We prioritize a "Testing Trophy" architecture, emphasizing integration tests.
+- `.env` is ignored
+- `.storage/` is ignored
+- `exports/` is ignored
+
+That means auth state and exported conversations are not intended to be committed.
+
+## Development
+
+Type-check:
 
 ```bash
-# Execute unit-level verifications
-npm run test:unit
-
-# Execute integration-level verifications
-npm run test:integration
+npm run type-check
 ```
+
+Run tests:
+
+```bash
+npm test
+```
+
+For architecture notes, see [ARCH.md](./ARCH.md).

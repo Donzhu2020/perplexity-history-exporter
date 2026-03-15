@@ -34,7 +34,8 @@ export class Repl {
         if (error instanceof Error && error.name === 'ExitPromptError') {
           this.terminateRepl()
         } else {
-          throw error
+          // Log the error but keep the REPL running instead of crashing
+          logger.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
     }

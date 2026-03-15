@@ -1,8 +1,8 @@
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { config } from '../utils/config.js'
 import { logger } from '../utils/logger.js'
-import { confirm } from '@inquirer/prompts'
 
 export class BrowserManager {
   static readonly BrowserLaunchError = class extends Error {
@@ -65,13 +65,12 @@ export class BrowserManager {
       await this.navigateToSettingsPage()
       await this.ensureUserIsAuthenticated()
 
-      // If user wants headless, restart now that we are logged in
+      // Keep the proven working headful session after manual login.
+      // Perplexity may reject the restarted headless session even when auth is valid.
       if (config.headless !== false) {
-        logger.info('Authentication successful. Restarting in headless mode...')
-        await this.close()
-        await this.launchBrowser(config.headless)
-        await this.initializeBrowserContext()
-        await this.navigateToSettingsPage()
+        logger.info(
+          'Authentication successful. Continuing in visible browser mode to avoid headless 403s.'
+        )
       }
 
       return this.getActivePage()
@@ -79,6 +78,30 @@ export class BrowserManager {
       if (_error instanceof Error) throw _error
       throw new BrowserManager.BrowserLaunchError(`Unexpected error: ${String(_error)}`)
     }
+  }
+
+  async relaunchAuthenticated(headless: boolean | 'new' = config.headless): Promise<Page> {
+    const isSavedAuthValid = this.checkIfSavedAuthenticationIsFresh(config.authStoragePath)
+    if (!isSavedAuthValid) {
+      throw new BrowserManager.AuthError(
+        'No fresh saved authentication state is available for background extraction.'
+      )
+    }
+
+    await this.close()
+    await this.launchBrowser(headless)
+    await this.initializeBrowserContext()
+    await this.navigateToSettingsPage()
+
+    const page = this.getActivePage()
+    const isLoggedIn = await this.verifyLoginStatus(page)
+    if (!isLoggedIn) {
+      throw new BrowserManager.AuthError(
+        'Saved authentication could not be reused for background extraction.'
+      )
+    }
+
+    return page
   }
 
   async close(): Promise<void> {
@@ -147,12 +170,13 @@ export class BrowserManager {
     const perplexitySettingsUrl = 'https://www.perplexity.ai/settings'
     try {
       await this.activePage.goto(perplexitySettingsUrl, {
-        timeout: 3000,
+        timeout: 30000,
+        waitUntil: 'domcontentloaded',
       })
     } catch (_error) {
-      throw new BrowserManager.NavigationError(
-        `Failed to navigate to settings: ${_error instanceof Error ? _error.message : String(_error)}`
-      )
+      // Navigation errors (redirects, slow load) are non-fatal in headful mode.
+      // The page may still be usable for login even if goto throws.
+      logger.warn(`Navigation warning (non-fatal): ${_error instanceof Error ? _error.message : String(_error)}`)
     }
   }
 
@@ -161,18 +185,11 @@ export class BrowserManager {
       throw new BrowserManager.AuthError('Page not initialized')
     }
 
-    const isActuallyLoggedIn = await this.verifyLoginStatus(this.activePage)
-
-    if (isActuallyLoggedIn) {
-      logger.success('Already logged in!')
-      return
-    }
-
     logger.info('Please log in manually in the browser window...')
-    await confirm({
-      message: 'Press Enter when you are logged in and on the settings page',
-      default: true,
-    })
+    logger.info('The browser will stay open for at least 1 minute before login is checked.')
+    logger.info('Complete the Perplexity login flow in the browser window.')
+
+    await this.waitForManualLogin(this.activePage)
 
     const perplexitySettingsUrl = 'https://www.perplexity.ai/settings'
     await this.activePage.goto(perplexitySettingsUrl, {
@@ -190,14 +207,42 @@ export class BrowserManager {
     logger.success('Authentication state saved!')
   }
 
+  private async waitForManualLogin(page: Page): Promise<void> {
+    const loginTimeoutInMs = 5 * 60 * 1000
+    const pollIntervalInMs = 1000
+    const timeoutAt = Date.now() + loginTimeoutInMs
+    const earliestAutoDetectAt = Date.now() + 60 * 1000
+
+    logger.info('Waiting 60 seconds before the first login check...')
+
+    while (Date.now() < timeoutAt) {
+      if (Date.now() < earliestAutoDetectAt) {
+        await page.waitForTimeout(pollIntervalInMs).catch(() => {})
+        continue
+      }
+
+      const isLoggedIn = await this.verifyLoginStatus(page).catch(() => false)
+      if (isLoggedIn) {
+        logger.success('Login detected in browser.')
+        return
+      }
+
+      await page.waitForTimeout(pollIntervalInMs).catch(() => {})
+    }
+
+    throw new BrowserManager.AuthError(
+      'Timed out waiting for manual login after 5 minutes. Keep the browser open and try again.'
+    )
+  }
+
   private async verifyLoginStatus(page: Page): Promise<boolean> {
     await page.waitForTimeout(1000).catch(() => {})
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
     const currentUrl = page.url()
 
-    const authenticatedUrlPaths = ['/settings', '/library', '/collections', '/account/details']
-    if (authenticatedUrlPaths.some((path) => currentUrl.includes(path))) {
-      return true
+    const unauthenticatedUrlPatterns = ['/login', '/sign-in', '/join', '/signup']
+    if (unauthenticatedUrlPatterns.some((path) => currentUrl.includes(path))) {
+      return false
     }
 
     const userMenuElementCount = await page
@@ -205,7 +250,16 @@ export class BrowserManager {
       .count()
       .catch(() => 0)
 
-    return userMenuElementCount > 0
+    if (userMenuElementCount > 0) {
+      return true
+    }
+
+    const authenticatedUiSignalCount = await page
+      .locator('text=/Account|Settings|Subscription|Manage Subscription/i')
+      .count()
+      .catch(() => 0)
+
+    return authenticatedUiSignalCount > 0
   }
 
   private async persistAuthenticationState(): Promise<void> {
@@ -213,6 +267,11 @@ export class BrowserManager {
       throw new BrowserManager.AuthError('No browser context available to save')
     }
     const currentStorageState = await this.activeContext.storageState()
+    // Ensure the storage directory exists (it may have been deleted by a reset)
+    const storageDir = dirname(config.authStoragePath)
+    if (!existsSync(storageDir)) {
+      mkdirSync(storageDir, { recursive: true })
+    }
     writeFileSync(config.authStoragePath, JSON.stringify(currentStorageState, null, 2))
   }
 

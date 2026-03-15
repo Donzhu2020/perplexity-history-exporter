@@ -64,7 +64,7 @@ export class CheckpointManager {
 
   setDiscoveredConversations(conversations: ConversationMetadata[]): void {
     this.currentCheckpoint.discoveredConversations = conversations
-    this.currentCheckpoint.discoveryCompleted = true
+    this.currentCheckpoint.discoveryCompleted = conversations.length > 0
     this.saveCheckpointToDisk()
     logger.success(`Discovery complete: ${conversations.length} conversations found`)
   }

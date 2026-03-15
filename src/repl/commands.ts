@@ -155,7 +155,11 @@ export class CommandHandler {
     try {
       const activePage = await browserManager.launch()
 
-      if (!this.progressCheckpointManager.isDiscoveryPhaseComplete()) {
+      const progress = this.progressCheckpointManager.getProcessingProgress()
+      const shouldRunDiscovery =
+        !this.progressCheckpointManager.isDiscoveryPhaseComplete() || progress.total === 0
+
+      if (shouldRunDiscovery) {
         await this.runDiscoveryPhase(activePage)
       }
 
@@ -164,6 +168,20 @@ export class CommandHandler {
       if (pendingConversations.length === 0) {
         logger.success('All conversations already processed!')
         return
+      }
+
+      if (config.headless !== false) {
+        logger.info('Switching extraction to background mode...')
+        try {
+          await browserManager.relaunchAuthenticated(config.headless)
+          logger.success('Background browser ready for extraction.')
+        } catch (_error) {
+          logger.warn(
+            `Background extraction unavailable, continuing in visible browser mode: ${
+              _error instanceof Error ? _error.message : String(_error)
+            }`
+          )
+        }
       }
 
       await this.runExtractionPhase(browserManager, pendingConversations)

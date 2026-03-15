@@ -3,6 +3,7 @@ dist/
 .storage/
 exports/
 coverage/
+.DS_Store
 
 .env
 *.log
