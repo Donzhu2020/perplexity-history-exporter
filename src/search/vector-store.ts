@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { config } from '../utils/config.js'
 import { logger } from '../utils/logger.js'
 import { chunkMarkdown } from '../utils/chunking.js'
-import { createAIProvider } from '../ai/provider-factory.js'
+import { createEmbeddingProvider } from '../ai/provider-factory.js'
 import type { AIProvider } from '../ai/provider.js'
 
 export type VectorDocMeta = Record<string, string>
@@ -51,16 +51,16 @@ export class VectorStore {
   }
 
   private vectorIndex: LocalIndex
-  private aiProvider: AIProvider
+  private embeddingProvider: AIProvider
 
   constructor() {
     this.vectorIndex = new LocalIndex(config.vectorIndexPath)
-    this.aiProvider = createAIProvider()
+    this.embeddingProvider = createEmbeddingProvider()
   }
 
   async validate(): Promise<void> {
     try {
-      await this.aiProvider.validate()
+      await this.embeddingProvider.validate()
     } catch (_error) {
       throw new VectorStore.VectorStoreError(
         `Vector store validation failed: ${_error instanceof Error ? _error.message : String(_error)}`
@@ -150,11 +150,11 @@ export class VectorStore {
     }
 
     if (
-      indexMetadata.provider !== this.aiProvider.providerName ||
-      indexMetadata.embeddingModel !== this.aiProvider.embeddingModel
+      indexMetadata.provider !== this.embeddingProvider.providerName ||
+      indexMetadata.embeddingModel !== this.embeddingProvider.embeddingModel
     ) {
       throw new VectorStore.IndexError(
-        `Vector index was built with ${indexMetadata.provider}/${indexMetadata.embeddingModel}. Rebuild the index for ${this.aiProvider.providerName}/${this.aiProvider.embeddingModel}.`
+        `Vector index was built with ${indexMetadata.provider}/${indexMetadata.embeddingModel}. Rebuild the index for ${this.embeddingProvider.providerName}/${this.embeddingProvider.embeddingModel}.`
       )
     }
   }
@@ -261,7 +261,7 @@ export class VectorStore {
     metas: VectorDocMeta[]
   ): Promise<boolean> {
     try {
-      const embeddingVectors = await this.aiProvider.embed(texts, 'document')
+      const embeddingVectors = await this.embeddingProvider.embed(texts, 'document')
       for (let k = 0; k < embeddingVectors.length; k++) {
         const vector = embeddingVectors[k]
         if (!vector) continue
@@ -278,7 +278,7 @@ export class VectorStore {
   }
 
   private async generateQueryEmbedding(query: string): Promise<number[]> {
-    const [queryEmbedding] = await this.aiProvider.embed([query], 'query')
+    const [queryEmbedding] = await this.embeddingProvider.embed([query], 'query')
     if (!queryEmbedding) {
       throw new VectorStore.EmbeddingError('Failed to generate embedding for query')
     }
@@ -306,9 +306,9 @@ export class VectorStore {
 
   private writeIndexMetadata(): void {
     const metadata: IndexMetadata = {
-      provider: this.aiProvider.providerName,
-      embeddingModel: this.aiProvider.embeddingModel,
-      generationModel: this.aiProvider.generationModel,
+      provider: this.embeddingProvider.providerName,
+      embeddingModel: this.embeddingProvider.embeddingModel,
+      generationModel: this.embeddingProvider.generationModel,
       builtAt: new Date().toISOString(),
     }
 

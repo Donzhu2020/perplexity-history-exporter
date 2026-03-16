@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace the current Ollama-first AI path with hosted-provider support, and turn the RAG flow into a complete and reliable loop.
+Replace the current Ollama-first AI path with hosted-provider and split-provider support, and turn the RAG flow into a complete and reliable loop.
 
 ## Workstreams
 
@@ -23,6 +23,12 @@ Replace the current Ollama-first AI path with hosted-provider support, and turn 
 - Add a Hugging Face provider for embeddings and text generation.
 - Support token based validation and hosted inference endpoints.
 - Allow Hugging Face to act as the default low-friction hosted workflow.
+
+### 2c. Split Providers
+
+- Support separate embedding and generation providers.
+- Allow practical mixed setups such as Hugging Face embeddings plus LM Studio generation.
+- Keep a legacy single-provider shortcut for simple cases.
 
 ### 3. Vector Index Closure
 

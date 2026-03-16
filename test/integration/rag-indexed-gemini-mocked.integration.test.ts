@@ -111,6 +111,14 @@ describe('RAG Indexed Flow (Gemini Mocked)', () => {
       get: () => 'gemini',
       configurable: true,
     })
+    Object.defineProperty(config, 'embedProvider', {
+      get: () => 'gemini',
+      configurable: true,
+    })
+    Object.defineProperty(config, 'generateProvider', {
+      get: () => 'gemini',
+      configurable: true,
+    })
     Object.defineProperty(config, 'geminiApiKey', {
       get: () => 'test-gemini-key',
       configurable: true,

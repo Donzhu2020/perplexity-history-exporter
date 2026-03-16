@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js'
 import chalk from 'chalk'
 import { join } from 'node:path'
 import { config } from '../utils/config.js'
-import { createAIProvider } from './provider-factory.js'
+import { createGenerationProvider } from './provider-factory.js'
 import type { AIProvider } from './provider.js'
 
 interface ResearchPlanFilters {
@@ -21,12 +21,12 @@ interface ResearchPlan {
 
 export class RagOrchestrator {
   private vectorStore: VectorStore
-  private aiProvider: AIProvider
+  private generationProvider: AIProvider
   private ripgrep: RgSearch
 
   constructor() {
     this.vectorStore = new VectorStore()
-    this.aiProvider = createAIProvider()
+    this.generationProvider = createGenerationProvider()
     this.ripgrep = new RgSearch()
   }
 
@@ -34,7 +34,7 @@ export class RagOrchestrator {
     logger.info(`Mightiest Adaptive RAG processing: "${question}"`)
 
     try {
-      await this.aiProvider.validate()
+      await this.generationProvider.validate()
       await this.vectorStore.assertIndexReady()
 
       const researchPlan = await this.developResearchPlan(question)
@@ -99,7 +99,7 @@ Analyze: "${originalQuestion}"
 Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {"spaceName": "...", "titleIncludes": "..."}}
 `
     try {
-      const response = await this.aiProvider.generate(plannerPrompt)
+      const response = await this.generationProvider.generate(plannerPrompt)
       const json = JSON.parse(response.match(/\{[\s\S]*\}/)?.[0] || '{}')
       return {
         strategy: json.strategy || 'precise',
@@ -247,7 +247,7 @@ Extract every specific fact, mention, date, or piece of code.
 Return JSON array: [{"fact": "...", "node_id": N, "thread": "..."}]
 `
       try {
-        const response = await this.aiProvider.generate(researchPrompt)
+        const response = await this.generationProvider.generate(researchPrompt)
         const extracted = JSON.parse(response.match(/\[[\s\S]*\]/)?.[0] || '[]')
         extracted.forEach((f: any) => {
           const original = pool[f.node_id - i]
@@ -289,7 +289,7 @@ INSTRUCTIONS:
 
 ANSWER:
 `
-    return this.aiProvider.generate(prompt)
+    return this.generationProvider.generate(prompt)
   }
 
   private displaySourceProvenance(facts: any[]): void {
@@ -313,7 +313,7 @@ Did I miss anything important?
 Return JSON: {"status": "ok" | "missed-info", "suggestion": "..."}
 `
     try {
-      const res = await this.aiProvider.generate(prompt)
+      const res = await this.generationProvider.generate(prompt)
       const parsed = JSON.parse(res.match(/\{[\s\S]*\}/)?.[0] || '{"status": "ok"}')
       if (parsed.status !== 'ok' && parsed.status !== 'missed-info') {
         return { status: 'ok' }

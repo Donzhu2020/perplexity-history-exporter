@@ -5,14 +5,17 @@ import { setupServer } from 'msw/node'
 import { http, HttpResponse } from 'msw'
 
 process.env.AI_PROVIDER = 'huggingface'
+process.env.EMBED_PROVIDER = 'huggingface'
+process.env.GENERATE_PROVIDER = 'lmstudio'
 process.env.HF_TOKEN = 'test-hf-token'
 process.env.HF_API_URL = 'https://router.huggingface.co/hf-inference/models'
 process.env.HF_ROUTER_URL = 'https://router.huggingface.co/v1'
-process.env.HF_MODEL = 'Qwen/Qwen2.5-7B-Instruct:hf-inference'
 process.env.HF_EMBED_MODEL = 'intfloat/multilingual-e5-large'
+process.env.LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1'
+process.env.LM_STUDIO_MODEL = 'qwen3.5-27b'
 
-const TEST_EXPORTS = join(process.cwd(), 'test-fixtures', 'rag-hf-exports')
-const TEST_INDEX = join(process.cwd(), 'test-fixtures', 'rag-hf-vector-index')
+const TEST_EXPORTS = join(process.cwd(), 'test-fixtures', 'rag-hf-lmstudio-exports')
+const TEST_INDEX = join(process.cwd(), 'test-fixtures', 'rag-hf-lmstudio-vector-index')
 
 const { config } = await import('../../src/utils/config.js')
 const encodedEmbedModel = config.huggingFaceEmbedModel.replace('/', '%2F')
@@ -28,7 +31,12 @@ const mswServer = setupServer(
       })
     )
   }),
-  http.post(new RegExp('/chat/completions$'), async ({ request }) => {
+  http.get(new RegExp('/v1/models$'), () => {
+    return HttpResponse.json({
+      data: [{ id: 'qwen3.5-27b' }],
+    })
+  }),
+  http.post(new RegExp('/v1/chat/completions$'), async ({ request }) => {
     const body = (await request.json()) as {
       messages?: Array<{ content?: string }>
     }
@@ -62,7 +70,7 @@ const mswServer = setupServer(
 let VectorStore: any
 let RagOrchestrator: any
 
-describe('RAG Indexed Flow (Hugging Face Mocked)', () => {
+describe('RAG Indexed Flow (HF Embeddings + LM Studio Generation)', () => {
   beforeAll(async () => {
     mswServer.listen()
 
@@ -79,28 +87,24 @@ describe('RAG Indexed Flow (Hugging Face Mocked)', () => {
       get: () => TEST_INDEX,
       configurable: true,
     })
-    Object.defineProperty(config, 'aiProvider', {
-      get: () => 'huggingface',
-      configurable: true,
-    })
     Object.defineProperty(config, 'embedProvider', {
       get: () => 'huggingface',
       configurable: true,
     })
     Object.defineProperty(config, 'generateProvider', {
-      get: () => 'huggingface',
+      get: () => 'lmstudio',
       configurable: true,
     })
     Object.defineProperty(config, 'huggingFaceToken', {
       get: () => 'test-hf-token',
       configurable: true,
     })
-    Object.defineProperty(config, 'huggingFaceModel', {
-      get: () => 'Qwen/Qwen2.5-7B-Instruct:hf-inference',
+    Object.defineProperty(config, 'lmStudioBaseUrl', {
+      get: () => 'http://127.0.0.1:1234/v1',
       configurable: true,
     })
-    Object.defineProperty(config, 'huggingFaceEmbedModel', {
-      get: () => 'intfloat/multilingual-e5-large',
+    Object.defineProperty(config, 'lmStudioModel', {
+      get: () => 'qwen3.5-27b',
       configurable: true,
     })
 
@@ -126,11 +130,6 @@ describe('RAG Indexed Flow (Hugging Face Mocked)', () => {
     writeFileSync(
       join(TEST_EXPORTS, 'typescript-guide.md'),
       `# TypeScript Guide\n\n**Space:** Dev  \n**ID:** ts-123  \n**Date:** 2025-01-01T00:00:00.000Z  \n\n## Question\n\nWhat does TypeScript do?\n\n## Answer\n\nTypeScript adds static typing to JavaScript.\n`
-    )
-
-    writeFileSync(
-      join(TEST_EXPORTS, 'testing-guide.md'),
-      `# Testing Guide\n\n**Space:** QA  \n**ID:** qa-123  \n**Date:** 2025-01-02T00:00:00.000Z  \n\n## Question\n\nWhat is testing?\n\n## Answer\n\nTesting verifies behavior.\n`
     )
 
     const store = new VectorStore()

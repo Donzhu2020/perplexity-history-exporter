@@ -32,7 +32,7 @@ export function showHelp(): void {
 
   logger.info(chalk.bold('💡 Search & RAG Tips:\n'))
   logger.info(
-    '  • RAG: Ask your exported history with Hugging Face, Gemini, or Ollama. Requires a built vector index.'
+    '  • RAG: Ask your exported history with the configured generation provider. Semantic retrieval uses the embedding provider and requires a built vector index.'
   )
   logger.info(
     '  • Auto Search: Intelligently switches between semantic and exact search based on query length.'

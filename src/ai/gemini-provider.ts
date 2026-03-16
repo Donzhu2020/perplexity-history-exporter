@@ -131,7 +131,9 @@ export class GeminiProvider implements AIProvider {
 
   private ensureApiKey(): void {
     if (!config.geminiApiKey) {
-      throw new GeminiProvider.GeminiError('GEMINI_API_KEY is required when AI_PROVIDER=gemini.')
+      throw new GeminiProvider.GeminiError(
+        'GEMINI_API_KEY is required when EMBED_PROVIDER=gemini or GENERATE_PROVIDER=gemini.'
+      )
     }
   }
 

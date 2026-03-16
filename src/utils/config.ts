@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { logger } from './logger.js'
+import type { ProviderName } from '../ai/provider.js'
 
 loadEnv()
 
@@ -15,7 +16,9 @@ const configSchema = z.object({
   exportDir: z.string().min(1),
   checkpointPath: z.string().min(1),
   vectorIndexPath: z.string().min(1),
-  aiProvider: z.enum(['gemini', 'ollama', 'huggingface']),
+  aiProvider: z.enum(['gemini', 'ollama', 'huggingface', 'lmstudio']),
+  embedProvider: z.enum(['gemini', 'ollama', 'huggingface', 'lmstudio']),
+  generateProvider: z.enum(['gemini', 'ollama', 'huggingface', 'lmstudio']),
   geminiApiKey: z.string(),
   geminiApiUrl: z.string().url(),
   geminiModel: z.string().min(1),
@@ -25,6 +28,9 @@ const configSchema = z.object({
   huggingFaceRouterUrl: z.string().url(),
   huggingFaceModel: z.string().min(1),
   huggingFaceEmbedModel: z.string().min(1),
+  lmStudioBaseUrl: z.string().url(),
+  lmStudioModel: z.string(),
+  lmStudioApiKey: z.string(),
   ollamaUrl: z.string().url(),
   ollamaModel: z.string().min(1),
   ollamaEmbedModel: z.string().min(1),
@@ -40,8 +46,9 @@ export type WaitMode = Config['waitMode']
 
 function parseEnvConfig(): Config {
   const defaultGeminiApiUrl = 'https://generativelanguage.googleapis.com/v1beta'
-  const defaultHuggingFaceApiUrl = 'https://api-inference.huggingface.co/models'
+  const defaultHuggingFaceApiUrl = 'https://router.huggingface.co/hf-inference/models'
   const defaultHuggingFaceRouterUrl = 'https://router.huggingface.co/v1'
+  const defaultLmStudioBaseUrl = 'http://127.0.0.1:1234/v1'
   const defaultOllamaUrl = 'http://localhost:11434'
   const defaultRateLimitMs = '500'
   const defaultParallelWorkers = '5'
@@ -67,7 +74,13 @@ function parseEnvConfig(): Config {
     exportDir: process.env['EXPORT_DIR'] ?? 'exports',
     checkpointPath: process.env['CHECKPOINT_PATH'] ?? join('.storage', 'checkpoint.json'),
     vectorIndexPath: process.env['VECTOR_INDEX_PATH'] ?? join('.storage', 'vector-index'),
-    aiProvider: process.env['AI_PROVIDER'] ?? 'gemini',
+    aiProvider: (process.env['AI_PROVIDER'] as ProviderName | undefined) ?? 'gemini',
+    embedProvider:
+      (process.env['EMBED_PROVIDER'] as ProviderName | undefined) ??
+      ((process.env['AI_PROVIDER'] as ProviderName | undefined) ?? 'gemini'),
+    generateProvider:
+      (process.env['GENERATE_PROVIDER'] as ProviderName | undefined) ??
+      ((process.env['AI_PROVIDER'] as ProviderName | undefined) ?? 'gemini'),
     geminiApiKey: process.env['GEMINI_API_KEY'] ?? '',
     geminiApiUrl: process.env['GEMINI_API_URL'] ?? defaultGeminiApiUrl,
     geminiModel: process.env['GEMINI_MODEL'] ?? 'gemini-2.0-flash',
@@ -75,9 +88,12 @@ function parseEnvConfig(): Config {
     huggingFaceToken: process.env['HF_TOKEN'] ?? '',
     huggingFaceApiUrl: process.env['HF_API_URL'] ?? defaultHuggingFaceApiUrl,
     huggingFaceRouterUrl: process.env['HF_ROUTER_URL'] ?? defaultHuggingFaceRouterUrl,
-    huggingFaceModel: process.env['HF_MODEL'] ?? 'Qwen/Qwen2.5-7B-Instruct',
+    huggingFaceModel: process.env['HF_MODEL'] ?? 'Qwen/Qwen2.5-7B-Instruct:hf-inference',
     huggingFaceEmbedModel:
       process.env['HF_EMBED_MODEL'] ?? 'intfloat/multilingual-e5-large',
+    lmStudioBaseUrl: process.env['LM_STUDIO_BASE_URL'] ?? defaultLmStudioBaseUrl,
+    lmStudioModel: process.env['LM_STUDIO_MODEL'] ?? '',
+    lmStudioApiKey: process.env['LM_STUDIO_API_KEY'] ?? '',
     ollamaUrl: process.env['OLLAMA_URL'] ?? defaultOllamaUrl,
     ollamaModel: process.env['OLLAMA_MODEL'] ?? 'llama3.1',
     ollamaEmbedModel: process.env['OLLAMA_EMBED_MODEL'] ?? 'nomic-embed-text',
@@ -94,6 +110,13 @@ function parseEnvConfig(): Config {
       const envVar = camelToSnakeCase(path).toUpperCase()
       logger.error(`  ${envVar}: ${issue.message}`)
     })
+    logger.error('\nPlease check your .env file and fix the above errors.')
+    process.exit(1)
+  }
+
+  if (result.data.embedProvider === 'lmstudio') {
+    logger.error('Invalid configuration detected:')
+    logger.error('  EMBED_PROVIDER: lmstudio is generation-only. Use Hugging Face, Gemini, or Ollama for embeddings.')
     logger.error('\nPlease check your .env file and fix the above errors.')
     process.exit(1)
   }

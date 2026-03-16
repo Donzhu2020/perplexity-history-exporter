@@ -13,6 +13,19 @@ const { config } = await import('../../src/utils/config.js')
 const { VectorStore } = await import('../../src/search/vector-store.js')
 const { RgSearch } = await import('../../src/search/rg-search.js')
 
+Object.defineProperty(config, 'aiProvider', {
+  get: () => 'gemini',
+  configurable: true,
+})
+Object.defineProperty(config, 'embedProvider', {
+  get: () => 'gemini',
+  configurable: true,
+})
+Object.defineProperty(config, 'generateProvider', {
+  get: () => 'gemini',
+  configurable: true,
+})
+
 const mockSearchOutcome = [
   {
     meta: {

@@ -74,7 +74,7 @@ export class HuggingFaceProvider implements AIProvider {
 
   async generate(prompt: string, modelOverride?: string): Promise<string> {
     this.ensureToken()
-    const model = modelOverride ?? this.generationModel
+    const model = this.normalizeGenerationModel(modelOverride ?? this.generationModel)
 
     try {
       const response = await fetch(`${config.huggingFaceRouterUrl}/chat/completions`, {
@@ -131,8 +131,12 @@ export class HuggingFaceProvider implements AIProvider {
   private ensureToken(): void {
     if (!config.huggingFaceToken.trim()) {
       throw new HuggingFaceProvider.HuggingFaceError(
-        'HF_TOKEN is required when AI_PROVIDER=huggingface.'
+        'HF_TOKEN is required when EMBED_PROVIDER=huggingface or GENERATE_PROVIDER=huggingface.'
       )
     }
+  }
+
+  private normalizeGenerationModel(model: string): string {
+    return model.includes(':') ? model : `${model}:hf-inference`
   }
 }

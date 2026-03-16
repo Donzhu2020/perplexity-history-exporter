@@ -1,4 +1,5 @@
 export type EmbeddingTaskType = 'document' | 'query'
+export type ProviderName = 'gemini' | 'ollama' | 'huggingface' | 'lmstudio'
 
 export interface AIProvider {
   readonly providerName: string

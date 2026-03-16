@@ -76,7 +76,7 @@ export class SearchOrchestrator {
   }
 
   private async performVectorOnlySearch(query: string): Promise<void> {
-    logger.info(`Using vector search (${config.aiProvider} + Vectra)...`)
+    logger.info(`Using vector search (${config.embedProvider} + Vectra)...`)
     await this.vectorStore.assertIndexReady()
     const searchResultLimit = 10
     const searchResults = await this.vectorStore.search(query, searchResultLimit)

@@ -27,7 +27,7 @@ Compared with the original upstream project, this version adds and changes:
 - Exports each conversation as a Markdown file under `exports/`.
 - Saves progress so interrupted runs can resume.
 - Supports exact search with ripgrep.
-- Supports semantic search and RAG with Hugging Face, Gemini, or Ollama.
+- Supports semantic search and RAG with mix-and-match providers for embeddings and generation.
 
 ## Why This Exists
 
@@ -45,9 +45,10 @@ This code uses Playwright, checkpoints, and a configurable AI provider on purpos
 - Playwright is used because Perplexity history is tied to an authenticated browser session.
 - Checkpoints are used because large exports can take time and should be resumable.
 - Markdown exports are used because they are portable, easy to inspect, and work well with search tools.
-- Hugging Face is the default AI path so semantic search and RAG can work without local model installs.
+- Hugging Face is the default embedding path so semantic search can work without local model installs.
 - Gemini is also supported as a hosted provider.
 - Ollama remains available as an optional local provider.
+- LM Studio is supported as a generation provider through its OpenAI-compatible API.
 
 Recent reliability fixes were added for real-world usage:
 
@@ -80,8 +81,9 @@ Recent reliability fixes were added for real-world usage:
 - Node.js 20 or newer recommended
 - npm
 - Playwright Chromium
-- Hugging Face token for the default semantic search and RAG workflow
-- Gemini API key if you choose the Gemini provider
+- Hugging Face token for the default semantic search workflow
+- Gemini API key if you choose Gemini for embeddings or generation
+- LM Studio if you want local generation from another machine or workstation
 - Ollama only if you explicitly choose the Ollama provider
 
 ## Setup
@@ -106,15 +108,20 @@ Common environment variables:
 - `CHECKPOINT_PATH`: where progress state is stored
 - `HEADLESS`: `true`, `false`, or `new`
 - `ENABLE_VECTOR_SEARCH`: set to `true` to enable semantic search
-- `AI_PROVIDER`: `huggingface`, `gemini`, or `ollama`
-- `HF_TOKEN`: required when `AI_PROVIDER=huggingface`
+- `AI_PROVIDER`: legacy shortcut to use one provider for both embeddings and generation
+- `EMBED_PROVIDER`: `huggingface`, `gemini`, or `ollama`
+- `GENERATE_PROVIDER`: `huggingface`, `gemini`, `ollama`, or `lmstudio`
+- `HF_TOKEN`: required when `EMBED_PROVIDER=huggingface` or `GENERATE_PROVIDER=huggingface`
 - `HF_API_URL`: Hugging Face feature extraction endpoint root
 - `HF_ROUTER_URL`: Hugging Face chat completion router root
 - `HF_MODEL`: generation model for RAG answers
 - `HF_EMBED_MODEL`: embedding model for vector search
-- `GEMINI_API_KEY`: required when `AI_PROVIDER=gemini`
+- `GEMINI_API_KEY`: required when `EMBED_PROVIDER=gemini` or `GENERATE_PROVIDER=gemini`
 - `GEMINI_MODEL`: generation model for RAG answers
 - `GEMINI_EMBED_MODEL`: embedding model for vector search
+- `LM_STUDIO_BASE_URL`: LM Studio OpenAI-compatible base URL
+- `LM_STUDIO_MODEL`: model name exposed by LM Studio
+- `LM_STUDIO_API_KEY`: optional API key if your LM Studio server requires one
 - `OLLAMA_URL`: Ollama server URL
 - `OLLAMA_MODEL`: generation model for RAG
 - `OLLAMA_EMBED_MODEL`: embedding model for vector search
@@ -122,11 +129,12 @@ Common environment variables:
 Example Hugging Face-first setup:
 
 ```bash
-AI_PROVIDER=huggingface
+EMBED_PROVIDER=huggingface
+GENERATE_PROVIDER=huggingface
 HF_TOKEN=your_hf_token_here
-HF_API_URL=https://api-inference.huggingface.co/models
+HF_API_URL=https://router.huggingface.co/hf-inference/models
 HF_ROUTER_URL=https://router.huggingface.co/v1
-HF_MODEL=Qwen/Qwen2.5-7B-Instruct
+HF_MODEL=Qwen/Qwen2.5-7B-Instruct:hf-inference
 HF_EMBED_MODEL=intfloat/multilingual-e5-large
 ENABLE_VECTOR_SEARCH=true
 ```
@@ -134,11 +142,26 @@ ENABLE_VECTOR_SEARCH=true
 Example Gemini setup:
 
 ```bash
-AI_PROVIDER=gemini
+EMBED_PROVIDER=gemini
+GENERATE_PROVIDER=gemini
 GEMINI_API_KEY=your_api_key_here
 GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_MODEL=gemini-2.0-flash
 GEMINI_EMBED_MODEL=gemini-embedding-001
+ENABLE_VECTOR_SEARCH=true
+```
+
+Example mixed-provider setup:
+
+```bash
+EMBED_PROVIDER=huggingface
+GENERATE_PROVIDER=lmstudio
+HF_TOKEN=your_hf_token_here
+HF_API_URL=https://router.huggingface.co/hf-inference/models
+HF_ROUTER_URL=https://router.huggingface.co/v1
+HF_EMBED_MODEL=intfloat/multilingual-e5-large
+LM_STUDIO_BASE_URL=http://your-lm-studio-host:1234/v1
+LM_STUDIO_MODEL=your-loaded-model-name
 ENABLE_VECTOR_SEARCH=true
 ```
 
@@ -161,7 +184,7 @@ Menu options:
 
 - `Start scraper (Library)`: discover and export conversations
 - `Search conversations`: search exported history
-- `Build vector index`: build embeddings for semantic search
+- `Build vector index`: build embeddings with the configured embedding provider
 - `Reset all data`: clear auth cache, checkpoint state, and vector index
 - `Help`: show command help
 
@@ -169,6 +192,7 @@ Important:
 
 - build the vector index before using semantic search or RAG,
 - rebuild the vector index whenever you change embedding provider or embedding model.
+- you do not need to rebuild the vector index when only the generation provider changes.
 
 ## Background Extraction
 
@@ -184,8 +208,8 @@ This is meant to balance reliability with convenience.
 ## Search Modes
 
 - `Exact`: fast text search over exported Markdown
-- `Semantic`: embedding-based search with the configured provider + Vectra
-- `RAG`: ask questions across your history using the configured provider
+- `Semantic`: embedding-based search with the configured embedding provider + Vectra
+- `RAG`: ask questions across your history using the configured generation provider
 - `Auto`: choose between exact and semantic behavior heuristically
 
 ## Data Safety

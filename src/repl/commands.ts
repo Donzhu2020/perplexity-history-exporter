@@ -252,8 +252,8 @@ export class CommandHandler {
       message: 'Search mode:',
       choices: [
         { name: 'Auto (semantic for long queries, exact for short)', value: 'auto' },
-        { name: `Semantic (${config.aiProvider} + Vectra)`, value: 'vector' },
-        { name: `RAG (Ask history with ${config.aiProvider})`, value: 'rag' },
+        { name: `Semantic (${config.embedProvider} + Vectra)`, value: 'vector' },
+        { name: `RAG (Ask history with ${config.generateProvider})`, value: 'rag' },
         { name: 'Exact text (ripgrep)', value: 'rg' },
       ],
       default: 'auto',
@@ -269,7 +269,7 @@ export class CommandHandler {
       const errorMessage = _error instanceof Error ? _error.message : String(_error)
       logger.error(errorMessage)
       logger.info(
-        `Configure ${config.aiProvider}, then run "Build vector index" before using semantic search or RAG.`
+        `Configure the embedding provider (${config.embedProvider}) and generation provider (${config.generateProvider}), then run "Build vector index" before using semantic search or RAG.`
       )
       throw new CommandHandler.ValidationError(errorMessage)
     }
@@ -281,7 +281,7 @@ export class CommandHandler {
 
     const shouldRetry = await confirm({
       message:
-        `AI provider validation failed for ${config.aiProvider}. Fix the provider configuration and retry vectorization?`,
+        `Provider validation failed for embeddings (${config.embedProvider}) or generation (${config.generateProvider}). Fix the configuration and retry vectorization?`,
       default: false,
     })
 
