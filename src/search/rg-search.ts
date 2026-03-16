@@ -47,11 +47,13 @@ export class RgSearch {
       .filter((a) => a !== '--color=always')
       .concat(['--color=never', '--json', '--max-filesize', '1M', '--no-binary'])
 
+    const ripgrepExecutable = await this.resolveRipgrepExecutable()
+
     return new Promise((resolve, reject) => {
       const MAX_MATCHES_PER_KEYWORD = 100
       const TIMEOUT_MS = 30000
       const matches: RgMatch[] = []
-      const rg = spawn(rgPath, cleanArgs, { cwd: config.exportDir })
+      const rg = spawn(ripgrepExecutable, cleanArgs, { cwd: config.exportDir })
 
       const timeout = setTimeout(() => {
         logger.warn(
@@ -142,8 +144,13 @@ export class RgSearch {
   }
 
   private spawnRipgrepProcess(args: string[]): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const ripgrepProcess = spawn(rgPath, args, {
+    return new Promise(async (resolve, reject) => {
+      const ripgrepExecutable = await this.resolveRipgrepExecutable().catch(reject)
+      if (!ripgrepExecutable) {
+        return
+      }
+
+      const ripgrepProcess = spawn(ripgrepExecutable, args, {
         cwd: config.exportDir,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -185,8 +192,31 @@ export class RgSearch {
 
   private getRipgrepInstallationInstructions(): string {
     return (
-      'Bundled ripgrep (rg) not found or failed to execute. ' +
-      'Please ensure the application was installed correctly.'
+      'Ripgrep (rg) was not available. Install ripgrep or ensure the bundled binary is executable.'
     )
+  }
+
+  private async resolveRipgrepExecutable(): Promise<string> {
+    const candidates = Array.from(new Set([rgPath, 'rg'])).filter(Boolean)
+
+    for (const candidate of candidates) {
+      const available = await this.isRipgrepUsable(candidate)
+      if (available) {
+        return candidate
+      }
+    }
+
+    throw new RgSearch.RgNotFoundError(this.getRipgrepInstallationInstructions())
+  }
+
+  private isRipgrepUsable(executable: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const child = spawn(executable, ['--version'], {
+        stdio: 'ignore',
+      })
+
+      child.on('error', () => resolve(false))
+      child.on('close', (code) => resolve(code === 0))
+    })
   }
 }
