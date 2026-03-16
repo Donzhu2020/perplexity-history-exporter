@@ -1,19 +1,32 @@
 import { VectorStore, type VectorSearchResult } from '../search/vector-store.js'
-import { OllamaClient } from './ollama-client.js'
 import { RgSearch } from '../search/rg-search.js'
 import { logger } from '../utils/logger.js'
 import chalk from 'chalk'
 import { join } from 'node:path'
 import { config } from '../utils/config.js'
+import { createAIProvider } from './provider-factory.js'
+import type { AIProvider } from './provider.js'
+
+interface ResearchPlanFilters {
+  spaceName?: string
+  titleIncludes?: string
+}
+
+interface ResearchPlan {
+  strategy: 'precise' | 'exhaustive'
+  queries: string[]
+  hardKeywords: string[]
+  filters: ResearchPlanFilters
+}
 
 export class RagOrchestrator {
   private vectorStore: VectorStore
-  private ollamaClient: OllamaClient
+  private aiProvider: AIProvider
   private ripgrep: RgSearch
 
   constructor() {
     this.vectorStore = new VectorStore()
-    this.ollamaClient = new OllamaClient()
+    this.aiProvider = createAIProvider()
     this.ripgrep = new RgSearch()
   }
 
@@ -21,6 +34,9 @@ export class RagOrchestrator {
     logger.info(`Mightiest Adaptive RAG processing: "${question}"`)
 
     try {
+      await this.aiProvider.validate()
+      await this.vectorStore.assertIndexReady()
+
       const researchPlan = await this.developResearchPlan(question)
       const exhaustiveMode = researchPlan.strategy === 'exhaustive'
 
@@ -36,11 +52,20 @@ export class RagOrchestrator {
       }
 
       const searchResults = await this.executeAdaptiveHybridSearch(researchPlan)
+      if (searchResults.length === 0) {
+        logger.warn('No relevant indexed history was found for this question.')
+        return
+      }
+
       const contextFacts = await this.extractFactsWithGranularMapReduce(
         question,
         searchResults,
         exhaustiveMode
       )
+      if (contextFacts.length === 0) {
+        logger.warn('Relevant snippets were found, but no usable facts could be extracted.')
+        return
+      }
 
       logger.info(`Synthesizing final answer from ${contextFacts.length} verified facts...`)
       const finalAnswer = await this.generateMightiestResponse(
@@ -55,7 +80,7 @@ export class RagOrchestrator {
       this.displaySourceProvenance(contextFacts)
 
       const feedback = await this.verifyAnswerQuality(question, finalAnswer, contextFacts)
-      if (feedback.status === 'improvement-needed') {
+      if (feedback.status === 'missed-info') {
         logger.warn(`Self-Correction: ${chalk.gray(feedback.suggestion)}`)
       }
     } catch (_error) {
@@ -64,43 +89,39 @@ export class RagOrchestrator {
     }
   }
 
-  private async developResearchPlan(originalQuestion: string): Promise<{
-    strategy: 'precise' | 'exhaustive'
-    queries: string[]
-    hardKeywords: string[]
-    filters: any
-  }> {
+  private async developResearchPlan(originalQuestion: string): Promise<ResearchPlan> {
     const plannerPrompt = `
 Analyze: "${originalQuestion}"
 1. Strategy: "precise" (specific facts) or "exhaustive" (broad summary/entity history).
 2. Variations: 3 semantic search phrases.
 3. Hard Keywords: Identify any names, IDs, or unique technical terms for exact matching.
-Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {}}
+4. Filters: optionally return {"spaceName": "..."} and/or {"titleIncludes": "..."} if the question clearly implies them.
+Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {"spaceName": "...", "titleIncludes": "..."}}
 `
     try {
-      const response = await this.ollamaClient.generate(plannerPrompt)
+      const response = await this.aiProvider.generate(plannerPrompt)
       const json = JSON.parse(response.match(/\{[\s\S]*\}/)?.[0] || '{}')
       return {
         strategy: json.strategy || 'precise',
         queries: json.queries || [originalQuestion],
         hardKeywords: json.hardKeywords || [],
-        filters: json.filters || {},
+        filters: this.normalizeResearchPlanFilters(json.filters),
       }
     } catch (_err) {
       return { strategy: 'precise', queries: [originalQuestion], hardKeywords: [], filters: {} }
     }
   }
 
-  private async executeAdaptiveHybridSearch(plan: {
-    queries: string[]
-    hardKeywords: string[]
-  }): Promise<VectorSearchResult[]> {
+  private async executeAdaptiveHybridSearch(plan: ResearchPlan): Promise<VectorSearchResult[]> {
     const searchPools: VectorSearchResult[][] = []
+    const filter = this.buildMetadataFilter(plan.filters)
 
     for (let i = 0; i < (plan.queries || []).length; i++) {
       const q = plan.queries[i]!
       logger.debug(`Executing semantic search [${i + 1}/${plan.queries.length}]: "${q}"`)
-      const res = await this.vectorStore.search(q, 40)
+      const res = filter
+        ? await this.vectorStore.searchWithMetadataFilter(q, filter, 40)
+        : await this.vectorStore.search(q, 40)
       searchPools.push(res)
     }
 
@@ -152,6 +173,54 @@ Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {
       .map((v) => v.res)
   }
 
+  private normalizeResearchPlanFilters(filters: unknown): ResearchPlanFilters {
+    if (!filters || typeof filters !== 'object') {
+      return {}
+    }
+
+    const candidate = filters as Record<string, unknown>
+    const normalized: ResearchPlanFilters = {}
+
+    if (typeof candidate['spaceName'] === 'string' && candidate['spaceName'].trim()) {
+      normalized.spaceName = candidate['spaceName'].trim()
+    }
+
+    if (typeof candidate['titleIncludes'] === 'string' && candidate['titleIncludes'].trim()) {
+      normalized.titleIncludes = candidate['titleIncludes'].trim()
+    }
+
+    return normalized
+  }
+
+  private buildMetadataFilter(filters: ResearchPlanFilters):
+    | ((meta: Record<string, any>) => boolean)
+    | null {
+    const hasSpaceFilter = !!filters.spaceName
+    const hasTitleFilter = !!filters.titleIncludes
+
+    if (!hasSpaceFilter && !hasTitleFilter) {
+      return null
+    }
+
+    return (meta: Record<string, any>) => {
+      const spaceName = String(meta['spaceName'] ?? '')
+      const title = String(meta['title'] ?? '')
+
+      if (filters.spaceName && spaceName !== filters.spaceName) {
+        return false
+      }
+
+      if (
+        filters.titleIncludes &&
+        !title.toLowerCase().includes(filters.titleIncludes.toLowerCase())
+      ) {
+        return false
+      }
+
+      return true
+    }
+  }
+
   private async extractFactsWithGranularMapReduce(
     question: string,
     results: VectorSearchResult[],
@@ -178,7 +247,7 @@ Extract every specific fact, mention, date, or piece of code.
 Return JSON array: [{"fact": "...", "node_id": N, "thread": "..."}]
 `
       try {
-        const response = await this.ollamaClient.generate(researchPrompt)
+        const response = await this.aiProvider.generate(researchPrompt)
         const extracted = JSON.parse(response.match(/\[[\s\S]*\]/)?.[0] || '[]')
         extracted.forEach((f: any) => {
           const original = pool[f.node_id - i]
@@ -220,7 +289,7 @@ INSTRUCTIONS:
 
 ANSWER:
 `
-    return this.ollamaClient.generate(prompt)
+    return this.aiProvider.generate(prompt)
   }
 
   private displaySourceProvenance(facts: any[]): void {
@@ -244,8 +313,12 @@ Did I miss anything important?
 Return JSON: {"status": "ok" | "missed-info", "suggestion": "..."}
 `
     try {
-      const res = await this.ollamaClient.generate(prompt)
-      return JSON.parse(res.match(/\{[\s\S]*\}/)?.[0] || '{"status": "ok"}')
+      const res = await this.aiProvider.generate(prompt)
+      const parsed = JSON.parse(res.match(/\{[\s\S]*\}/)?.[0] || '{"status": "ok"}')
+      if (parsed.status !== 'ok' && parsed.status !== 'missed-info') {
+        return { status: 'ok' }
+      }
+      return parsed
     } catch (_err) {
       return { status: 'ok' }
     }

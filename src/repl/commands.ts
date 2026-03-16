@@ -252,8 +252,8 @@ export class CommandHandler {
       message: 'Search mode:',
       choices: [
         { name: 'Auto (semantic for long queries, exact for short)', value: 'auto' },
-        { name: 'Semantic (Ollama + Vectra)', value: 'vector' },
-        { name: 'RAG (Ask history with Ollama)', value: 'rag' },
+        { name: `Semantic (${config.aiProvider} + Vectra)`, value: 'vector' },
+        { name: `RAG (Ask history with ${config.aiProvider})`, value: 'rag' },
         { name: 'Exact text (ripgrep)', value: 'rg' },
       ],
       default: 'auto',
@@ -268,7 +268,9 @@ export class CommandHandler {
     } catch (_error) {
       const errorMessage = _error instanceof Error ? _error.message : String(_error)
       logger.error(errorMessage)
-      logger.info('Start Ollama with the embedding model, then run "vectorize".')
+      logger.info(
+        `Configure ${config.aiProvider}, then run "Build vector index" before using semantic search or RAG.`
+      )
       throw new CommandHandler.ValidationError(errorMessage)
     }
   }
@@ -279,7 +281,7 @@ export class CommandHandler {
 
     const shouldRetry = await confirm({
       message:
-        'Ollama validation failed. Start Ollama (with the embedding model) and retry vectorization?',
+        `AI provider validation failed for ${config.aiProvider}. Fix the provider configuration and retry vectorization?`,
       default: false,
     })
 

@@ -32,13 +32,16 @@ export function showHelp(): void {
 
   logger.info(chalk.bold('💡 Search & RAG Tips:\n'))
   logger.info(
-    '  • RAG: Ask history with Ollama. Combines vector retrieval with AI generation for comprehensive answers.'
+    '  • RAG: Ask your exported history with the configured AI provider. Requires a built vector index.'
   )
   logger.info(
     '  • Auto Search: Intelligently switches between semantic and exact search based on query length.'
   )
   logger.info(
     '  • Semantic: Best for finding conceptually similar topics even without exact keyword matches.'
+  )
+  logger.info(
+    '  • If you switch embedding providers or models, rebuild the vector index before using semantic search or RAG.'
   )
   logger.info('  • Exact: Ideal for finding specific phrases or technical terms.\n')
 }

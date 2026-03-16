@@ -1,16 +1,24 @@
 import { LocalIndex } from 'vectra'
 import { join } from 'node:path'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { config } from '../utils/config.js'
 import { logger } from '../utils/logger.js'
-import { OllamaClient } from '../ai/ollama-client.js'
 import { chunkMarkdown } from '../utils/chunking.js'
+import { createAIProvider } from '../ai/provider-factory.js'
+import type { AIProvider } from '../ai/provider.js'
 
 export type VectorDocMeta = Record<string, string>
 
 export interface VectorSearchResult {
   meta: VectorDocMeta
   score: number
+}
+
+interface IndexMetadata {
+  provider: string
+  embeddingModel: string
+  generationModel: string
+  builtAt: string
 }
 
 export class VectorStore {
@@ -43,16 +51,16 @@ export class VectorStore {
   }
 
   private vectorIndex: LocalIndex
-  private ollamaClient: OllamaClient
+  private aiProvider: AIProvider
 
   constructor() {
     this.vectorIndex = new LocalIndex(config.vectorIndexPath)
-    this.ollamaClient = new OllamaClient()
+    this.aiProvider = createAIProvider()
   }
 
   async validate(): Promise<void> {
     try {
-      await this.ollamaClient.validate()
+      await this.aiProvider.validate()
     } catch (_error) {
       throw new VectorStore.VectorStoreError(
         `Vector store validation failed: ${_error instanceof Error ? _error.message : String(_error)}`
@@ -71,12 +79,14 @@ export class VectorStore {
 
     await this.ensureIndexExists()
     await this.processMarkdownFilesByBatches(markdownFiles)
+    this.writeIndexMetadata()
 
     logger.success('Vector index rebuild complete.')
   }
 
   async search(query: string, limit = 10): Promise<VectorSearchResult[]> {
     try {
+      await this.assertIndexReady()
       const queryEmbedding = await this.generateQueryEmbedding(query)
       const rawResults = await this.queryVectorIndex(queryEmbedding, query, limit)
       return this.formatVectorSearchResults(rawResults)
@@ -93,6 +103,7 @@ export class VectorStore {
     limit = 10
   ): Promise<VectorSearchResult[]> {
     try {
+      await this.assertIndexReady()
       const queryEmbedding = await this.generateQueryEmbedding(query)
       const rawResults = await this.vectorIndex.queryItems(
         queryEmbedding,
@@ -111,6 +122,40 @@ export class VectorStore {
   private async ensureIndexExists(): Promise<void> {
     if (!(await this.vectorIndex.isIndexCreated())) {
       await this.vectorIndex.createIndex()
+    }
+  }
+
+  async hasUsableIndex(): Promise<boolean> {
+    try {
+      await this.assertIndexReady()
+      return true
+    } catch (_error) {
+      return false
+    }
+  }
+
+  async assertIndexReady(): Promise<void> {
+    const isIndexCreated = await this.vectorIndex.isIndexCreated()
+    if (!isIndexCreated) {
+      throw new VectorStore.IndexError(
+        'Vector index not found. Run "Build vector index" before using semantic search or RAG.'
+      )
+    }
+
+    const indexMetadata = this.readIndexMetadata()
+    if (!indexMetadata) {
+      throw new VectorStore.IndexError(
+        'Vector index metadata is missing. Rebuild the vector index before using semantic search or RAG.'
+      )
+    }
+
+    if (
+      indexMetadata.provider !== this.aiProvider.providerName ||
+      indexMetadata.embeddingModel !== this.aiProvider.embeddingModel
+    ) {
+      throw new VectorStore.IndexError(
+        `Vector index was built with ${indexMetadata.provider}/${indexMetadata.embeddingModel}. Rebuild the index for ${this.aiProvider.providerName}/${this.aiProvider.embeddingModel}.`
+      )
     }
   }
 
@@ -135,6 +180,7 @@ export class VectorStore {
     const EMBEDDING_BATCH_SIZE = 10
     let pendingTextsToEmbed: string[] = []
     let pendingMetadataToInsert: VectorDocMeta[] = []
+    let failedEmbeddingBatchCount = 0
 
     for (let i = 0; i < files.length; i++) {
       const filePath = files[i]!
@@ -151,7 +197,13 @@ export class VectorStore {
         })
 
         if (pendingTextsToEmbed.length >= EMBEDDING_BATCH_SIZE) {
-          await this.processAndInsertEmbeddingBatch(pendingTextsToEmbed, pendingMetadataToInsert)
+          const success = await this.processAndInsertEmbeddingBatch(
+            pendingTextsToEmbed,
+            pendingMetadataToInsert
+          )
+          if (!success) {
+            failedEmbeddingBatchCount++
+          }
           pendingTextsToEmbed = []
           pendingMetadataToInsert = []
         }
@@ -163,10 +215,22 @@ export class VectorStore {
     }
 
     if (pendingTextsToEmbed.length > 0) {
-      await this.processAndInsertEmbeddingBatch(pendingTextsToEmbed, pendingMetadataToInsert)
+      const success = await this.processAndInsertEmbeddingBatch(
+        pendingTextsToEmbed,
+        pendingMetadataToInsert
+      )
+      if (!success) {
+        failedEmbeddingBatchCount++
+      }
     }
 
     await this.vectorIndex.endUpdate()
+
+    if (failedEmbeddingBatchCount > 0) {
+      throw new VectorStore.IndexError(
+        `Vector index build failed: ${failedEmbeddingBatchCount} embedding batch(es) could not be processed.`
+      )
+    }
   }
 
   private extractContentAndMetadata(path: string): {
@@ -195,9 +259,9 @@ export class VectorStore {
   private async processAndInsertEmbeddingBatch(
     texts: string[],
     metas: VectorDocMeta[]
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
-      const embeddingVectors = await this.ollamaClient.embed(texts)
+      const embeddingVectors = await this.aiProvider.embed(texts, 'document')
       for (let k = 0; k < embeddingVectors.length; k++) {
         const vector = embeddingVectors[k]
         if (!vector) continue
@@ -206,13 +270,15 @@ export class VectorStore {
           metadata: metas[k] as Record<string, any>,
         })
       }
+      return true
     } catch (_error) {
       logger.error(`Batch embedding failed: ${(_error as Error).message}`)
+      return false
     }
   }
 
   private async generateQueryEmbedding(query: string): Promise<number[]> {
-    const [queryEmbedding] = await this.ollamaClient.embed([query])
+    const [queryEmbedding] = await this.aiProvider.embed([query], 'query')
     if (!queryEmbedding) {
       throw new VectorStore.EmbeddingError('Failed to generate embedding for query')
     }
@@ -232,5 +298,33 @@ export class VectorStore {
       meta: result.item.metadata as VectorDocMeta,
       score: result.score,
     }))
+  }
+
+  private getIndexMetadataPath(): string {
+    return join(config.vectorIndexPath, 'provider-meta.json')
+  }
+
+  private writeIndexMetadata(): void {
+    const metadata: IndexMetadata = {
+      provider: this.aiProvider.providerName,
+      embeddingModel: this.aiProvider.embeddingModel,
+      generationModel: this.aiProvider.generationModel,
+      builtAt: new Date().toISOString(),
+    }
+
+    writeFileSync(this.getIndexMetadataPath(), JSON.stringify(metadata, null, 2))
+  }
+
+  private readIndexMetadata(): IndexMetadata | null {
+    const metadataPath = this.getIndexMetadataPath()
+    if (!existsSync(metadataPath)) {
+      return null
+    }
+
+    try {
+      return JSON.parse(readFileSync(metadataPath, 'utf-8')) as IndexMetadata
+    } catch (_error) {
+      return null
+    }
   }
 }

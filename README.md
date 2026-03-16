@@ -27,7 +27,7 @@ Compared with the original upstream project, this version adds and changes:
 - Exports each conversation as a Markdown file under `exports/`.
 - Saves progress so interrupted runs can resume.
 - Supports exact search with ripgrep.
-- Supports semantic search and RAG with Ollama.
+- Supports semantic search and RAG with Gemini or Ollama.
 
 ## Why This Exists
 
@@ -40,12 +40,13 @@ Perplexity is great for exploration, but conversation history is not ideal as a 
 
 ## Why The Current Design Looks Like This
 
-This code uses Playwright, checkpoints, and optional local AI on purpose:
+This code uses Playwright, checkpoints, and a configurable AI provider on purpose:
 
 - Playwright is used because Perplexity history is tied to an authenticated browser session.
 - Checkpoints are used because large exports can take time and should be resumable.
 - Markdown exports are used because they are portable, easy to inspect, and work well with search tools.
-- Ollama integration is optional so the basic export flow works even if you only want a local archive.
+- Gemini is the default AI path so semantic search and RAG can work without local model installs.
+- Ollama remains available as an optional local provider.
 
 Recent reliability fixes were added for real-world usage:
 
@@ -69,7 +70,7 @@ Recent reliability fixes were added for real-world usage:
 - `src/scraper/`: browser automation, discovery, extraction, checkpoints
 - `src/export/`: Markdown writing and filename sanitizing
 - `src/search/`: exact and semantic search orchestration
-- `src/ai/`: Ollama client and RAG logic
+- `src/ai/`: provider abstraction, Gemini/Ollama clients, and RAG logic
 - `src/repl/`: CLI menu and command flow
 - `src/utils/`: config, logging, waiting strategies
 
@@ -78,7 +79,8 @@ Recent reliability fixes were added for real-world usage:
 - Node.js 20 or newer recommended
 - npm
 - Playwright Chromium
-- Ollama only if you want semantic search or RAG
+- Gemini API key for the default semantic search and RAG workflow
+- Ollama only if you explicitly choose the Ollama provider
 
 ## Setup
 
@@ -102,9 +104,24 @@ Common environment variables:
 - `CHECKPOINT_PATH`: where progress state is stored
 - `HEADLESS`: `true`, `false`, or `new`
 - `ENABLE_VECTOR_SEARCH`: set to `true` to enable semantic search
+- `AI_PROVIDER`: `gemini` or `ollama`
+- `GEMINI_API_KEY`: required when `AI_PROVIDER=gemini`
+- `GEMINI_MODEL`: generation model for RAG answers
+- `GEMINI_EMBED_MODEL`: embedding model for vector search
 - `OLLAMA_URL`: Ollama server URL
 - `OLLAMA_MODEL`: generation model for RAG
 - `OLLAMA_EMBED_MODEL`: embedding model for vector search
+
+Example Gemini-first setup:
+
+```bash
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_api_key_here
+GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_MODEL=gemini-2.0-flash
+GEMINI_EMBED_MODEL=gemini-embedding-001
+ENABLE_VECTOR_SEARCH=true
+```
 
 ## Usage
 
@@ -129,6 +146,11 @@ Menu options:
 - `Reset all data`: clear auth cache, checkpoint state, and vector index
 - `Help`: show command help
 
+Important:
+
+- build the vector index before using semantic search or RAG,
+- rebuild the vector index whenever you change embedding provider or embedding model.
+
 ## Background Extraction
 
 To keep login reliable, the tool opens a visible browser for manual authentication when needed.
@@ -143,8 +165,9 @@ This is meant to balance reliability with convenience.
 ## Search Modes
 
 - `Exact`: fast text search over exported Markdown
-- `Semantic`: embedding-based search with Ollama + Vectra
+- `Semantic`: embedding-based search with the configured provider + Vectra
 - `RAG`: ask questions across your history using local models
+- `RAG`: ask questions across your history using the configured provider
 - `Auto`: choose between exact and semantic behavior heuristically
 
 ## Data Safety

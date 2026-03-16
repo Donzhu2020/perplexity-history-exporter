@@ -15,6 +15,11 @@ const configSchema = z.object({
   exportDir: z.string().min(1),
   checkpointPath: z.string().min(1),
   vectorIndexPath: z.string().min(1),
+  aiProvider: z.enum(['gemini', 'ollama']),
+  geminiApiKey: z.string(),
+  geminiApiUrl: z.string().url(),
+  geminiModel: z.string().min(1),
+  geminiEmbedModel: z.string().min(1),
   ollamaUrl: z.string().url(),
   ollamaModel: z.string().min(1),
   ollamaEmbedModel: z.string().min(1),
@@ -29,6 +34,7 @@ export type Config = z.infer<typeof configSchema>
 export type WaitMode = Config['waitMode']
 
 function parseEnvConfig(): Config {
+  const defaultGeminiApiUrl = 'https://generativelanguage.googleapis.com/v1beta'
   const defaultOllamaUrl = 'http://localhost:11434'
   const defaultRateLimitMs = '500'
   const defaultParallelWorkers = '5'
@@ -54,6 +60,11 @@ function parseEnvConfig(): Config {
     exportDir: process.env['EXPORT_DIR'] ?? 'exports',
     checkpointPath: process.env['CHECKPOINT_PATH'] ?? join('.storage', 'checkpoint.json'),
     vectorIndexPath: process.env['VECTOR_INDEX_PATH'] ?? join('.storage', 'vector-index'),
+    aiProvider: process.env['AI_PROVIDER'] ?? 'gemini',
+    geminiApiKey: process.env['GEMINI_API_KEY'] ?? '',
+    geminiApiUrl: process.env['GEMINI_API_URL'] ?? defaultGeminiApiUrl,
+    geminiModel: process.env['GEMINI_MODEL'] ?? 'gemini-2.0-flash',
+    geminiEmbedModel: process.env['GEMINI_EMBED_MODEL'] ?? 'gemini-embedding-001',
     ollamaUrl: process.env['OLLAMA_URL'] ?? defaultOllamaUrl,
     ollamaModel: process.env['OLLAMA_MODEL'] ?? 'llama3.1',
     ollamaEmbedModel: process.env['OLLAMA_EMBED_MODEL'] ?? 'nomic-embed-text',

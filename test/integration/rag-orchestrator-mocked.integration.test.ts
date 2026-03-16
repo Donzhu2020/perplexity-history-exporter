@@ -1,10 +1,17 @@
 import { describe, it, expect, beforeAll, afterEach, afterAll, vi } from 'vitest'
 import { setupServer } from 'msw/node'
 import { http, HttpResponse } from 'msw'
-import { RagOrchestrator } from '../../src/ai/rag-orchestrator.js'
-import { config } from '../../src/utils/config.js'
-import { VectorStore } from '../../src/search/vector-store.js'
-import { RgSearch } from '../../src/search/rg-search.js'
+
+process.env.AI_PROVIDER = 'gemini'
+process.env.GEMINI_API_KEY = 'test-gemini-key'
+process.env.GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta'
+process.env.GEMINI_MODEL = 'gemini-2.0-flash'
+process.env.GEMINI_EMBED_MODEL = 'gemini-embedding-001'
+
+const { RagOrchestrator } = await import('../../src/ai/rag-orchestrator.js')
+const { config } = await import('../../src/utils/config.js')
+const { VectorStore } = await import('../../src/search/vector-store.js')
+const { RgSearch } = await import('../../src/search/rg-search.js')
 
 const mockSearchOutcome = [
   {
@@ -19,29 +26,43 @@ const mockSearchOutcome = [
 ]
 
 const mswServer = setupServer(
-  http.post(`${config.ollamaUrl}/api/generate`, async ({ request }) => {
+  http.post(new RegExp(`/models/${config.geminiEmbedModel}:embedContent`), () => {
+    return HttpResponse.json({
+      embedding: {
+        values: [0.1, 0.2, 0.3],
+      },
+    })
+  }),
+  http.post(new RegExp(`/models/${config.geminiModel}:generateContent`), async ({ request }) => {
     const body = (await request.json()) as { prompt: string }
+    const prompt =
+      body.prompt ??
+      body.contents?.flatMap((content: any) => content.parts ?? []).map((part: any) => part.text).join('\n') ??
+      ''
 
     let responseText = ''
-    if (body.prompt.includes('Analyze:')) {
+    if (prompt.includes('Analyze:')) {
       responseText =
         '{"strategy": "precise", "queries": ["What is in my history?"], "hardKeywords": ["mocked"], "filters": {}}'
-    } else if (body.prompt.includes('You are the Researcher.')) {
+    } else if (prompt.includes('You are the Researcher.')) {
       responseText =
         '[{"fact": "Based on your history, there is a Mocked Title.", "node_id": 0, "thread": "Mocked Title"}]'
-    } else if (body.prompt.includes('You are the Narrator.')) {
+    } else if (prompt.includes('You are the Narrator.')) {
       responseText = 'Based on your history, there is a Mocked Title.'
-    } else if (body.prompt.includes('Verify the answer.')) {
+    } else if (prompt.includes('Verify the answer.')) {
       responseText = '{"status": "ok"}'
     } else {
       responseText = '{"status": "ok"}'
     }
 
     return HttpResponse.json({
-      model: config.ollamaModel,
-      created_at: new Date().toISOString(),
-      response: responseText,
-      done: true,
+      candidates: [
+        {
+          content: {
+            parts: [{ text: responseText }],
+          },
+        },
+      ],
     })
   })
 )
@@ -57,6 +78,7 @@ describe('RagOrchestrator (MSW Mocked)', () => {
   it('should orchestrate the RAG flow successfully', async () => {
     vi.spyOn(VectorStore.prototype, 'search').mockResolvedValue(mockSearchOutcome)
     vi.spyOn(VectorStore.prototype, 'validate').mockResolvedValue(undefined)
+    vi.spyOn(VectorStore.prototype, 'assertIndexReady').mockResolvedValue(undefined)
     vi.spyOn(RgSearch.prototype, 'captureSearchMatches').mockResolvedValue([])
 
     const ragOrchestratorInstance = new RagOrchestrator()
