@@ -22,6 +22,9 @@ const modelListSchema = z.object({
 })
 
 export class LMStudioProvider implements AIProvider {
+  private static readonly REQUEST_TIMEOUT_MS = 120000
+  private static readonly MAX_RETRIES = 2
+
   static readonly LMStudioError = class extends Error {
     constructor(message: string) {
       super(message)
@@ -47,37 +50,49 @@ export class LMStudioProvider implements AIProvider {
       )
     }
 
-    try {
-      const response = await fetch(`${config.lmStudioBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: this.buildHeaders(),
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      })
+    for (let attempt = 0; attempt <= LMStudioProvider.MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(`${config.lmStudioBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: this.buildHeaders(),
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: AbortSignal.timeout(LMStudioProvider.REQUEST_TIMEOUT_MS),
+        })
 
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => '')
-        throw new LMStudioProvider.LMStudioError(
-          `LM Studio generation request failed with status ${response.status} – ${errorBody.slice(0, 300)}`
-        )
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => '')
+          throw new LMStudioProvider.LMStudioError(
+            `LM Studio generation request failed with status ${response.status} – ${errorBody.slice(0, 300)}`
+          )
+        }
+
+        const json = await response.json()
+        const parsed = chatCompletionSchema.parse(json)
+        const content = this.stripThinkingContent(parsed.choices[0]?.message.content ?? '').trim()
+        if (!content) {
+          throw new LMStudioProvider.LMStudioError('LM Studio returned empty content.')
+        }
+
+        return content
+      } catch (_error) {
+        if (_error instanceof LMStudioProvider.LMStudioError) {
+          if (attempt === LMStudioProvider.MAX_RETRIES || !this.shouldRetry(_error.message)) {
+            throw _error
+          }
+        } else if (attempt === LMStudioProvider.MAX_RETRIES) {
+          throw new LMStudioProvider.LMStudioError(
+            `Network error while calling LM Studio: ${_error instanceof Error ? _error.message : String(_error)}`
+          )
+        }
+
+        await this.sleep(750 * (attempt + 1))
       }
-
-      const json = await response.json()
-      const parsed = chatCompletionSchema.parse(json)
-      const content = this.stripThinkingContent(parsed.choices[0]?.message.content ?? '').trim()
-      if (!content) {
-        throw new LMStudioProvider.LMStudioError('LM Studio returned empty content.')
-      }
-
-      return content
-    } catch (_error) {
-      if (_error instanceof LMStudioProvider.LMStudioError) throw _error
-      throw new LMStudioProvider.LMStudioError(
-        `Network error while calling LM Studio: ${_error instanceof Error ? _error.message : String(_error)}`
-      )
     }
+
+    throw new LMStudioProvider.LMStudioError('LM Studio request failed after retries.')
   }
 
   async validate(): Promise<void> {
@@ -121,5 +136,21 @@ export class LMStudioProvider implements AIProvider {
 
   private stripThinkingContent(text: string): string {
     return text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '')
+  }
+
+  private shouldRetry(message: string): boolean {
+    const lowerMessage = message.toLowerCase()
+    return (
+      lowerMessage.includes('timeout') ||
+      lowerMessage.includes('fetch failed') ||
+      lowerMessage.includes('network error') ||
+      lowerMessage.includes('status 502') ||
+      lowerMessage.includes('status 503') ||
+      lowerMessage.includes('status 504')
+    )
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 }

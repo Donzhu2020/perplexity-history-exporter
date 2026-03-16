@@ -19,7 +19,22 @@ interface ResearchPlan {
   filters: ResearchPlanFilters
 }
 
+interface ContextFact {
+  fact: string
+  source_title: string
+  thread?: string
+}
+
 export class RagOrchestrator {
+  private static readonly PRECISE_QUERY_LIMIT = 1
+  private static readonly EXHAUSTIVE_QUERY_LIMIT = 2
+  private static readonly PRECISE_RESULTS_LIMIT = 12
+  private static readonly EXHAUSTIVE_RESULTS_LIMIT = 24
+  private static readonly MAP_BATCH_SIZE = 6
+  private static readonly MAX_FACT_LENGTH = 220
+  private static readonly PRECISE_FACT_LIMIT = 10
+  private static readonly EXHAUSTIVE_FACT_LIMIT = 18
+
   private vectorStore: VectorStore
   private generationProvider: AIProvider
   private ripgrep: RgSearch
@@ -93,7 +108,7 @@ export class RagOrchestrator {
     const plannerPrompt = `
 Analyze: "${originalQuestion}"
 1. Strategy: "precise" (specific facts) or "exhaustive" (broad summary/entity history).
-2. Variations: 3 semantic search phrases.
+2. Variations: at most 2 semantic search phrases. Prefer 1 for short queries.
 3. Hard Keywords: Identify any names, IDs, or unique technical terms for exact matching.
 4. Filters: optionally return {"spaceName": "..."} and/or {"titleIncludes": "..."} if the question clearly implies them.
 Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {"spaceName": "...", "titleIncludes": "..."}}
@@ -101,27 +116,36 @@ Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {
     try {
       const response = await this.generationProvider.generate(plannerPrompt)
       const json = JSON.parse(response.match(/\{[\s\S]*\}/)?.[0] || '{}')
-      return {
+      return this.normalizeResearchPlan(originalQuestion, {
         strategy: json.strategy || 'precise',
         queries: json.queries || [originalQuestion],
         hardKeywords: json.hardKeywords || [],
         filters: this.normalizeResearchPlanFilters(json.filters),
-      }
+      })
     } catch (_err) {
-      return { strategy: 'precise', queries: [originalQuestion], hardKeywords: [], filters: {} }
+      return this.normalizeResearchPlan(originalQuestion, {
+        strategy: 'precise',
+        queries: [originalQuestion],
+        hardKeywords: [],
+        filters: {},
+      })
     }
   }
 
   private async executeAdaptiveHybridSearch(plan: ResearchPlan): Promise<VectorSearchResult[]> {
     const searchPools: VectorSearchResult[][] = []
     const filter = this.buildMetadataFilter(plan.filters)
+    const searchLimit =
+      plan.strategy === 'exhaustive'
+        ? RagOrchestrator.EXHAUSTIVE_RESULTS_LIMIT
+        : RagOrchestrator.PRECISE_RESULTS_LIMIT
 
     for (let i = 0; i < (plan.queries || []).length; i++) {
       const q = plan.queries[i]!
       logger.debug(`Executing semantic search [${i + 1}/${plan.queries.length}]: "${q}"`)
       const res = filter
-        ? await this.vectorStore.searchWithMetadataFilter(q, filter, 40)
-        : await this.vectorStore.search(q, 40)
+        ? await this.vectorStore.searchWithMetadataFilter(q, filter, searchLimit)
+        : await this.vectorStore.search(q, searchLimit)
       searchPools.push(res)
     }
 
@@ -225,13 +249,15 @@ Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {
     question: string,
     results: VectorSearchResult[],
     exhaustive: boolean
-  ): Promise<any[]> {
-    const poolLimit = exhaustive ? 60 : 20
+  ): Promise<ContextFact[]> {
+    const poolLimit = exhaustive
+      ? RagOrchestrator.EXHAUSTIVE_RESULTS_LIMIT
+      : RagOrchestrator.PRECISE_RESULTS_LIMIT
     const pool = results.slice(0, poolLimit)
     if (pool.length === 0) return []
 
-    const findings: any[] = []
-    const batchSize = 10
+    const findings: ContextFact[] = []
+    const batchSize = RagOrchestrator.MAP_BATCH_SIZE
     const totalBatches = Math.ceil(pool.length / batchSize)
 
     for (let i = 0, batchIdx = 0; i < pool.length; i += batchSize, batchIdx++) {
@@ -241,9 +267,14 @@ Return JSON: {"strategy": "...", "queries": [], "hardKeywords": [], "filters": {
       const researchPrompt = `
 You are the Researcher. Analyze these snippets from the user's history for the question: "${question}"
 Context:
-${batch.map((r, j) => `[Node ${i + j}] ${r.meta['title']}: ${r.meta['snippet']}`).join('\n\n')}
+${batch
+  .map(
+    (r, j) =>
+      `[Node ${i + j}] ${r.meta['title'] ?? 'Untitled'}: ${this.truncateSnippet(r.meta['snippet'] ?? '')}`
+  )
+  .join('\n\n')}
 
-Extract every specific fact, mention, date, or piece of code.
+Extract the most useful specific facts, mentions, dates, or code details.
 Return JSON array: [{"fact": "...", "node_id": N, "thread": "..."}]
 `
       try {
@@ -252,7 +283,7 @@ Return JSON array: [{"fact": "...", "node_id": N, "thread": "..."}]
         extracted.forEach((f: any) => {
           const original = pool[f.node_id - i]
           findings.push({
-            fact: f.fact,
+            fact: this.truncateFact(String(f.fact ?? '')),
             source_title: original?.meta['title'] || f.thread || 'Unknown',
             thread: f.thread || original?.meta['title'] || 'Unknown',
           })
@@ -260,22 +291,22 @@ Return JSON array: [{"fact": "...", "node_id": N, "thread": "..."}]
       } catch (_err) {
         batch.forEach((r) => {
           findings.push({
-            fact: r.meta['snippet'],
-            source_title: r.meta['title'],
+            fact: this.truncateFact(r.meta['snippet'] ?? ''),
+            source_title: r.meta['title'] ?? 'Unknown',
           })
         })
       }
     }
 
-    return findings
+    return this.compactFindings(findings, exhaustive)
   }
 
   private async generateMightiestResponse(
     question: string,
-    findings: any[],
+    findings: ContextFact[],
     strategy: string
   ): Promise<string> {
-    const prompt = `
+    const detailedPrompt = `
 You are the Narrator. Synthesize these research findings into a cohesive, mightiest answer for: "${question}"
 Strategy: ${strategy}
 Findings:
@@ -289,7 +320,35 @@ INSTRUCTIONS:
 
 ANSWER:
 `
-    return this.generationProvider.generate(prompt)
+
+    try {
+      return await this.generationProvider.generate(detailedPrompt)
+    } catch (_error) {
+      const message = _error instanceof Error ? _error.message : String(_error)
+      if (!this.shouldRetryWithCompactPrompt(message)) {
+        throw _error
+      }
+
+      logger.warn('Generation context was too large. Retrying with a compact answer prompt...')
+      const compactFindings = findings.slice(
+        0,
+        Math.max(6, Math.floor(findings.length / 2))
+      )
+      const compactPrompt = `
+You are the Narrator. Answer the user's question briefly and accurately.
+Question: "${question}"
+Use only these findings:
+${compactFindings.map((f, i) => `[Find ${i}] (${f.source_title}): ${f.fact}`).join('\n')}
+
+Rules:
+1. Keep the answer concise.
+2. Use only the strongest findings.
+3. Cite sources with [Find N].
+
+ANSWER:
+`
+      return this.generationProvider.generate(compactPrompt)
+    }
   }
 
   private displaySourceProvenance(facts: any[]): void {
@@ -303,7 +362,7 @@ ANSWER:
   private async verifyAnswerQuality(
     question: string,
     answer: string,
-    _facts: any[]
+    _facts: ContextFact[]
   ): Promise<{ status: string; suggestion?: string }> {
     const prompt = `
 Verify the answer.
@@ -322,5 +381,89 @@ Return JSON: {"status": "ok" | "missed-info", "suggestion": "..."}
     } catch (_err) {
       return { status: 'ok' }
     }
+  }
+
+  private normalizeResearchPlan(originalQuestion: string, plan: ResearchPlan): ResearchPlan {
+    const normalizedQueries = Array.from(
+      new Set(
+        (plan.queries || [])
+          .map((query) => String(query ?? '').trim())
+          .filter((query) => query.length > 0)
+      )
+    )
+    const normalizedHardKeywords = Array.from(
+      new Set(
+        (plan.hardKeywords || [])
+          .map((keyword) => String(keyword ?? '').trim())
+          .filter((keyword) => keyword.length > 0)
+      )
+    )
+    const wordCount = originalQuestion.trim().split(/\s+/).filter(Boolean).length
+    const forcedPrecise = wordCount <= 3
+    const strategy = forcedPrecise ? 'precise' : plan.strategy
+    const queryLimit =
+      strategy === 'exhaustive'
+        ? RagOrchestrator.EXHAUSTIVE_QUERY_LIMIT
+        : RagOrchestrator.PRECISE_QUERY_LIMIT
+
+    return {
+      strategy,
+      queries: (normalizedQueries.length > 0 ? normalizedQueries : [originalQuestion]).slice(
+        0,
+        queryLimit
+      ),
+      hardKeywords: normalizedHardKeywords.slice(0, 3),
+      filters: plan.filters ?? {},
+    }
+  }
+
+  private compactFindings(findings: ContextFact[], exhaustive: boolean): ContextFact[] {
+    const limit = exhaustive
+      ? RagOrchestrator.EXHAUSTIVE_FACT_LIMIT
+      : RagOrchestrator.PRECISE_FACT_LIMIT
+    const seen = new Set<string>()
+    const compacted: ContextFact[] = []
+
+    for (const finding of findings) {
+      const fact = this.truncateFact(finding.fact)
+      const key = `${finding.source_title.toLowerCase()}::${fact.toLowerCase()}`
+      if (!fact || seen.has(key)) {
+        continue
+      }
+
+      seen.add(key)
+      compacted.push({
+        ...finding,
+        fact,
+      })
+
+      if (compacted.length >= limit) {
+        break
+      }
+    }
+
+    return compacted
+  }
+
+  private truncateSnippet(snippet: string): string {
+    const cleanSnippet = String(snippet ?? '').replace(/\s+/g, ' ').trim()
+    return cleanSnippet.length > 320 ? `${cleanSnippet.slice(0, 320)}...` : cleanSnippet
+  }
+
+  private truncateFact(fact: string): string {
+    const cleanFact = String(fact ?? '').replace(/\s+/g, ' ').trim()
+    return cleanFact.length > RagOrchestrator.MAX_FACT_LENGTH
+      ? `${cleanFact.slice(0, RagOrchestrator.MAX_FACT_LENGTH)}...`
+      : cleanFact
+  }
+
+  private shouldRetryWithCompactPrompt(message: string): boolean {
+    const lowerMessage = message.toLowerCase()
+    return (
+      lowerMessage.includes('context length') ||
+      lowerMessage.includes('n_keep') ||
+      lowerMessage.includes('fetch failed') ||
+      lowerMessage.includes('timeout')
+    )
   }
 }
