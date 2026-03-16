@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace the current Ollama-first AI path with a Gemini-first provider model, and turn the RAG flow into a complete and reliable loop.
+Replace the current Ollama-first AI path with hosted-provider support, and turn the RAG flow into a complete and reliable loop.
 
 ## Workstreams
 
@@ -17,6 +17,12 @@ Replace the current Ollama-first AI path with a Gemini-first provider model, and
 - Add a Gemini provider for embeddings and text generation.
 - Make Gemini the default provider through environment configuration.
 - Support API key based validation with clear error messages.
+
+### 2b. Hugging Face Integration
+
+- Add a Hugging Face provider for embeddings and text generation.
+- Support token based validation and hosted inference endpoints.
+- Allow Hugging Face to act as the default low-friction hosted workflow.
 
 ### 3. Vector Index Closure
 

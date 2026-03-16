@@ -15,11 +15,16 @@ const configSchema = z.object({
   exportDir: z.string().min(1),
   checkpointPath: z.string().min(1),
   vectorIndexPath: z.string().min(1),
-  aiProvider: z.enum(['gemini', 'ollama']),
+  aiProvider: z.enum(['gemini', 'ollama', 'huggingface']),
   geminiApiKey: z.string(),
   geminiApiUrl: z.string().url(),
   geminiModel: z.string().min(1),
   geminiEmbedModel: z.string().min(1),
+  huggingFaceToken: z.string(),
+  huggingFaceApiUrl: z.string().url(),
+  huggingFaceRouterUrl: z.string().url(),
+  huggingFaceModel: z.string().min(1),
+  huggingFaceEmbedModel: z.string().min(1),
   ollamaUrl: z.string().url(),
   ollamaModel: z.string().min(1),
   ollamaEmbedModel: z.string().min(1),
@@ -35,6 +40,8 @@ export type WaitMode = Config['waitMode']
 
 function parseEnvConfig(): Config {
   const defaultGeminiApiUrl = 'https://generativelanguage.googleapis.com/v1beta'
+  const defaultHuggingFaceApiUrl = 'https://api-inference.huggingface.co/models'
+  const defaultHuggingFaceRouterUrl = 'https://router.huggingface.co/v1'
   const defaultOllamaUrl = 'http://localhost:11434'
   const defaultRateLimitMs = '500'
   const defaultParallelWorkers = '5'
@@ -65,6 +72,12 @@ function parseEnvConfig(): Config {
     geminiApiUrl: process.env['GEMINI_API_URL'] ?? defaultGeminiApiUrl,
     geminiModel: process.env['GEMINI_MODEL'] ?? 'gemini-2.0-flash',
     geminiEmbedModel: process.env['GEMINI_EMBED_MODEL'] ?? 'gemini-embedding-001',
+    huggingFaceToken: process.env['HF_TOKEN'] ?? '',
+    huggingFaceApiUrl: process.env['HF_API_URL'] ?? defaultHuggingFaceApiUrl,
+    huggingFaceRouterUrl: process.env['HF_ROUTER_URL'] ?? defaultHuggingFaceRouterUrl,
+    huggingFaceModel: process.env['HF_MODEL'] ?? 'Qwen/Qwen2.5-7B-Instruct',
+    huggingFaceEmbedModel:
+      process.env['HF_EMBED_MODEL'] ?? 'intfloat/multilingual-e5-large',
     ollamaUrl: process.env['OLLAMA_URL'] ?? defaultOllamaUrl,
     ollamaModel: process.env['OLLAMA_MODEL'] ?? 'llama3.1',
     ollamaEmbedModel: process.env['OLLAMA_EMBED_MODEL'] ?? 'nomic-embed-text',

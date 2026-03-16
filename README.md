@@ -27,7 +27,7 @@ Compared with the original upstream project, this version adds and changes:
 - Exports each conversation as a Markdown file under `exports/`.
 - Saves progress so interrupted runs can resume.
 - Supports exact search with ripgrep.
-- Supports semantic search and RAG with Gemini or Ollama.
+- Supports semantic search and RAG with Hugging Face, Gemini, or Ollama.
 
 ## Why This Exists
 
@@ -45,7 +45,8 @@ This code uses Playwright, checkpoints, and a configurable AI provider on purpos
 - Playwright is used because Perplexity history is tied to an authenticated browser session.
 - Checkpoints are used because large exports can take time and should be resumable.
 - Markdown exports are used because they are portable, easy to inspect, and work well with search tools.
-- Gemini is the default AI path so semantic search and RAG can work without local model installs.
+- Hugging Face is the default AI path so semantic search and RAG can work without local model installs.
+- Gemini is also supported as a hosted provider.
 - Ollama remains available as an optional local provider.
 
 Recent reliability fixes were added for real-world usage:
@@ -79,7 +80,8 @@ Recent reliability fixes were added for real-world usage:
 - Node.js 20 or newer recommended
 - npm
 - Playwright Chromium
-- Gemini API key for the default semantic search and RAG workflow
+- Hugging Face token for the default semantic search and RAG workflow
+- Gemini API key if you choose the Gemini provider
 - Ollama only if you explicitly choose the Ollama provider
 
 ## Setup
@@ -104,7 +106,12 @@ Common environment variables:
 - `CHECKPOINT_PATH`: where progress state is stored
 - `HEADLESS`: `true`, `false`, or `new`
 - `ENABLE_VECTOR_SEARCH`: set to `true` to enable semantic search
-- `AI_PROVIDER`: `gemini` or `ollama`
+- `AI_PROVIDER`: `huggingface`, `gemini`, or `ollama`
+- `HF_TOKEN`: required when `AI_PROVIDER=huggingface`
+- `HF_API_URL`: Hugging Face feature extraction endpoint root
+- `HF_ROUTER_URL`: Hugging Face chat completion router root
+- `HF_MODEL`: generation model for RAG answers
+- `HF_EMBED_MODEL`: embedding model for vector search
 - `GEMINI_API_KEY`: required when `AI_PROVIDER=gemini`
 - `GEMINI_MODEL`: generation model for RAG answers
 - `GEMINI_EMBED_MODEL`: embedding model for vector search
@@ -112,7 +119,19 @@ Common environment variables:
 - `OLLAMA_MODEL`: generation model for RAG
 - `OLLAMA_EMBED_MODEL`: embedding model for vector search
 
-Example Gemini-first setup:
+Example Hugging Face-first setup:
+
+```bash
+AI_PROVIDER=huggingface
+HF_TOKEN=your_hf_token_here
+HF_API_URL=https://api-inference.huggingface.co/models
+HF_ROUTER_URL=https://router.huggingface.co/v1
+HF_MODEL=Qwen/Qwen2.5-7B-Instruct
+HF_EMBED_MODEL=intfloat/multilingual-e5-large
+ENABLE_VECTOR_SEARCH=true
+```
+
+Example Gemini setup:
 
 ```bash
 AI_PROVIDER=gemini
@@ -166,7 +185,6 @@ This is meant to balance reliability with convenience.
 
 - `Exact`: fast text search over exported Markdown
 - `Semantic`: embedding-based search with the configured provider + Vectra
-- `RAG`: ask questions across your history using local models
 - `RAG`: ask questions across your history using the configured provider
 - `Auto`: choose between exact and semantic behavior heuristically
 
